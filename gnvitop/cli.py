@@ -93,7 +93,7 @@ def main():
     )
     parser.add_argument(
         "--tui-refresh",
-        type=int,
+        type=lambda v: max(1, int(v)),
         default=2,
         metavar="SECONDS",
         help="TUI auto-refresh interval in seconds (default: 2)",

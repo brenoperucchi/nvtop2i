@@ -196,13 +196,15 @@ def _gpu_full(alias, gpu, history, width):
             _fit(line3, width - 1), _fit(line4, width - 1)]
 
 
-def _gpu_compact(alias, gpu, history, width, host_w):
+def _gpu_compact(alias, gpu, history, width, host_w, selected=False):
     """One line for one GPU (mockup B). Optional parts drop out when narrow."""
     idx = gpu["index"]
     util = gpu.get("gpu_utilization_pct")
     mem_pct = gpu.get("memory_usage_pct")
     temp = gpu.get("temperature_c")
-    head = f" {alias[:host_w]:<{host_w}}  {idx} {_short_name(gpu['name'])[:10]:<10} "
+    head_alias = alias[:host_w].ljust(host_w)
+    head_rest = f"  {idx} {_short_name(gpu['name'])[:10]:<10} "
+    head = " " + head_alias + head_rest
     temp_s = f" {temp:.0f}°C" if temp is not None else " --"
 
     power, limit, fan = gpu.get("power_w"), gpu.get("power_limit_w"), gpu.get("fan_pct")
@@ -230,7 +232,8 @@ def _gpu_compact(alias, gpu, history, width, host_w):
     mem_label = f"{gpu['memory_used_mb'] / 1024:.1f}/{gpu['memory_total_mb'] / 1024:.0f}G"
     if len(mem_label) + 3 > inner:
         mem_label = f"{gpu['memory_usage_pct']:.0f}%"
-    segs = ([(head, "white")]
+    segs = ([(" ", "white"), (head_alias, "host_sel" if selected else "white"),
+             (head_rest, "white")]
             + _bar_segs("GPU", util, inner, f"{(util or 0):.0f}%", _usage_role(util))
             + [(" ", "white")]
             + _bar_segs("MEM", mem_pct, inner, mem_label, _usage_role(mem_pct))
@@ -350,7 +353,7 @@ def _gpu_section(results, history, state, width, compact):
     for hi, host in enumerate(results):
         collapsed = host["alias"] in state.collapsed
         ok = host["status"] == "ok"
-        if not compact or not ok:
+        if not compact or not ok or collapsed:
             lines.append(_host_header(host, hi == state.host_index, collapsed, width,
                                       max(10, 3 * state.refresh_interval)))
         if not ok or collapsed:
@@ -359,7 +362,8 @@ def _gpu_section(results, history, state, width, compact):
             continue
         for gpu in host["gpus"]:
             if compact or not _has_nvtop_fields(gpu):
-                lines.append(_gpu_compact(host["alias"], gpu, history, width, host_w))
+                lines.append(_gpu_compact(host["alias"], gpu, history, width, host_w,
+                                          compact and hi == state.host_index))
             else:
                 lines.extend(_gpu_full(host["alias"], gpu, history, width))
                 lines.append([])
@@ -372,7 +376,7 @@ def build_screen(results, history, state, width, height, meta):
     """Lay out the whole screen as lines of (text, role) segments."""
     width = max(20, width)
     state.host_aliases = [h["alias"] for h in results]
-    state.host_index = min(state.host_index, max(0, len(results) - 1))
+    state.sync_hosts()
     gpu_count = sum(len(h.get("gpus", [])) for h in results if h["status"] == "ok")
     left = [(f" gnvitop  {gpu_count} GPUs on {len(results)} hosts", "title")]
     if meta.get("loading") and not meta.get("last_update"):
@@ -396,10 +400,7 @@ def build_screen(results, history, state, width, height, meta):
         body = _gpu_section(results, history, state, width, compact)
 
     rows = process_rows(results, state)
-    if rows:
-        state.proc_index = min(state.proc_index, len(rows) - 1)
-    else:
-        state.proc_index = 0
+    state.sync_procs(rows)
     lines = top + body
     room = height - 1 - len(lines)
     if room >= TABLE_MIN_LINES:
@@ -484,19 +485,19 @@ def _handle_key(key, state, screen):
     elif key == curses.KEY_F4:
         state.filtering = True
     elif key == curses.KEY_F6:
-        i = INTERVALS.index(state.refresh_interval) if state.refresh_interval in INTERVALS else -1
-        state.refresh_interval = INTERVALS[(i + 1) % len(INTERVALS)]
+        bigger = [i for i in INTERVALS if i > state.refresh_interval]
+        state.refresh_interval = bigger[0] if bigger else INTERVALS[0]
         return "interval"
     elif key == curses.KEY_F8:
         state.compact = not state.compact
     elif key == curses.KEY_LEFT:
-        state.move_host(-1, screen.hosts)
+        state.move_host(-1)
     elif key == curses.KEY_RIGHT:
-        state.move_host(1, screen.hosts)
+        state.move_host(1)
     elif key == curses.KEY_UP:
-        state.move_proc(-1, len(screen.rows))
+        state.move_proc(-1, screen.rows)
     elif key == curses.KEY_DOWN:
-        state.move_proc(1, len(screen.rows))
+        state.move_proc(1, screen.rows)
     return None
 
 

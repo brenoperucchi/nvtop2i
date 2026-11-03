@@ -178,16 +178,11 @@ def test_selected_row_scrolls_into_view():
     assert "cmd1 " not in "\n".join(text)
 
 
-class Keys:
-    def __init__(self, hosts=3, rows=4):
-        self.hosts, self.rows = hosts, [None] * rows
-
-
 def test_key_handling():
     import curses
     st = UIState(2)
     st.host_aliases = ["a", "b", "c"]
-    scr = tui.Screen([], 3, [None] * 4, False)
+    scr = tui.Screen([], 3, [{"host": "a", "gpu": 0, "pid": p} for p in (1, 2, 3, 4)], False)
     assert tui._handle_key(curses.KEY_F8, st, scr) is None and st.compact
     tui._handle_key(curses.KEY_F3, st, scr)
     assert st.sort_key != "mem"
@@ -263,3 +258,27 @@ def test_narrow_table_drops_user_and_type_to_keep_the_command_readable():
     assert "USER" not in header and "TYPE" not in header
     row = next(l for l in narrow if "ollama" in l)
     assert "ollama" in row and "31.0GiB" in row
+
+
+def test_f6_goes_to_the_next_larger_interval_even_from_an_odd_value():
+    import curses
+    scr = tui.Screen([], 1, [], False)
+    st = UIState(3)
+    tui._handle_key(curses.KEY_F6, st, scr)
+    assert st.refresh_interval == 5
+    st.refresh_interval = 30
+    tui._handle_key(curses.KEY_F6, st, scr)
+    assert st.refresh_interval == 1
+
+
+def test_compact_view_keeps_a_collapsed_host_visible_and_marks_the_selected_one():
+    st = UIState(2)
+    st.collapsed.add("ryzen9")
+    screen, text = render(results(), 120, 30, compact=True, state=st)
+    joined = "\n".join(text)
+    assert screen.compact
+    assert "\u25b8 ryzen9 [Online]" in joined          # folded, but still listed
+    assert "ryzen9     0 5090" not in joined
+    # the selected host (first one) is drawn with its own role in the rows
+    sel_roles = [(t, r) for line in screen.lines for t, r in line if r == "host_sel"]
+    assert sel_roles and sel_roles[0][0].strip() == "localhost"

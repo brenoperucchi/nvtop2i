@@ -71,7 +71,8 @@ COMBINED_CMD = (
     "echo MX; mx-smi 2>/dev/null; echo '---SEP---'; " + _MX_PROC_QUERY + "; "
     "elif ls /dev/accel0 >/dev/null 2>&1; then "
     "echo TPU; " + _TPU_CHIP_QUERY + "; echo '---SEP---'; " + _TPU_PROC_QUERY + "; "
-    "fi"
+    # bash reads this script from stdin on remote hosts; keep commands off it
+    "fi </dev/null"
 )
 
 CURRENT_USER = getpass.getuser()
@@ -186,10 +187,12 @@ def _build_gpus(gpu_part):
             continue
         parts = [p.strip() for p in line.split(",")]
         if len(parts) >= 7:
-            mem_total = float(parts[2])
-            mem_used = float(parts[3])
-            mem_free = float(parts[4])
-            utilization = float(parts[5])
+            # nvidia-smi prints [N/A] for values a driver cannot report (seen on
+            # WSL); a missing number must not drop the whole host
+            mem_total = _num(parts[2]) or 0.0
+            mem_used = _num(parts[3]) or 0.0
+            mem_free = _num(parts[4]) or 0.0
+            utilization = _num(parts[5]) or 0.0
             extra = parts[7:] + [""] * (7 - len(parts[7:]))
             pcie_gen = _num(extra[5])
             pcie_width = _num(extra[6])
@@ -201,7 +204,7 @@ def _build_gpus(gpu_part):
                 "memory_free_mb": mem_free,
                 "memory_usage_pct": round(mem_used / mem_total * 100, 1) if mem_total > 0 else 0,
                 "gpu_utilization_pct": utilization,
-                "temperature_c": float(parts[6]),
+                "temperature_c": _num(parts[6]) or 0.0,
                 "clock_gr_mhz": _num(extra[0]),
                 "clock_mem_mhz": _num(extra[1]),
                 "fan_pct": _num(extra[2]),
@@ -613,7 +616,7 @@ def query_local_gpu():
 
 
 def _sort_results(results):
-    order = {"ok": 0, "no_gpu": 1, "error": 2}
+    order = {"ok": 0, "connecting": 1, "no_gpu": 2, "error": 3}
     results.sort(key=lambda x: (
         0 if x.get("is_local") else 1,
         order.get(x["status"], 3),

@@ -77,17 +77,22 @@ def test_process_rows_sort_filter_and_collapse():
     assert all(r["host"] != "ryzen9" for r in process_rows(RESULTS, st))
 
 
+def _rows(*pids):
+    return [{"host": "h", "gpu": 0, "pid": p} for p in pids]
+
+
 def test_ui_state_navigation():
     st = UIState()
-    st.move_host(-1, 3)
-    assert st.host_index == 2
-    st.move_host(1, 3)
+    st.host_aliases = ["a", "b", "c"]
+    st.move_host(-1)
+    assert st.host_index == 2 and st.selected_alias == "c"
+    st.move_host(1)
     assert st.host_index == 0
-    st.move_proc(-5, 4)
+    st.move_proc(-5, _rows(1, 2, 3, 4))
     assert st.proc_index == 0
-    st.move_proc(10, 4)
+    st.move_proc(10, _rows(1, 2, 3, 4))
     assert st.proc_index == 3
-    st.move_proc(1, 0)
+    st.move_proc(1, [])
     assert st.proc_index == 0
     first = st.sort_key
     for _ in range(5):
@@ -96,3 +101,37 @@ def test_ui_state_navigation():
     st.toggle_collapsed("x")
     st.toggle_collapsed("x")
     assert st.collapsed == set()
+
+
+def test_host_selection_follows_the_host_when_the_list_reorders():
+    st = UIState()
+    st.host_aliases = ["a", "b", "c"]
+    st.move_host(1)                       # b
+    st.host_aliases = ["c", "b", "a"]     # statuses changed, order changed
+    st.sync_hosts()
+    assert st.host_index == 1 and st.host_aliases[st.host_index] == "b"
+    st.toggle_collapsed_at(st.host_index)
+    assert st.collapsed == {"b"}
+    st.host_aliases = ["c", "a"]          # b disappeared: clamp, no crash
+    st.sync_hosts()
+    assert 0 <= st.host_index < 2
+
+
+def test_process_selection_follows_the_process_when_the_rows_resort():
+    st = UIState()
+    st.move_proc(1, _rows(10, 20, 30))    # pid 20
+    st.sync_procs(_rows(30, 20, 10))
+    assert st.proc_index == 1
+    st.sync_procs(_rows(30, 10))          # 20 exited: clamp
+    assert st.proc_index == 1
+    st.sync_procs([])
+    assert st.proc_index == 0
+
+
+def test_without_a_selection_the_index_is_kept():
+    st = UIState()
+    st.proc_index = 2
+    st.sync_procs(_rows(1, 2, 3, 4))
+    assert st.proc_index == 2
+    st.sync_procs(_rows(1))
+    assert st.proc_index == 0

@@ -82,6 +82,10 @@ class UIState:
         self.filter_text = ""    # F4
         self.host_index = 0      # left/right
         self.proc_index = 0      # up/down
+        # Once the user moves, the selection follows the host or process, not
+        # its row: the lists re-sort whenever a status or a memory size changes.
+        self.selected_alias = None
+        self.selected_proc = None
         self.filtering = False   # typing into the F4 filter
         self.host_aliases = []   # aliases in display order, set by the renderer
 
@@ -99,17 +103,42 @@ class UIState:
         i = SORT_KEYS.index(self.sort_key)
         self.sort_key = SORT_KEYS[(i + 1) % len(SORT_KEYS)]
 
-    def move_host(self, delta, host_count):
-        if host_count <= 0:
-            self.host_index = 0
+    def sync_hosts(self):
+        """Re-find the selected host after the list changed order."""
+        n = len(self.host_aliases)
+        if self.selected_alias in self.host_aliases:
+            self.host_index = self.host_aliases.index(self.selected_alias)
         else:
-            self.host_index = (self.host_index + delta) % host_count
+            self.host_index = min(self.host_index, max(0, n - 1))
 
-    def move_proc(self, delta, proc_count):
-        if proc_count <= 0:
-            self.proc_index = 0
+    def sync_procs(self, rows):
+        keys = [row_key(r) for r in rows]
+        if self.selected_proc in keys:
+            self.proc_index = keys.index(self.selected_proc)
         else:
-            self.proc_index = max(0, min(proc_count - 1, self.proc_index + delta))
+            self.proc_index = min(self.proc_index, max(0, len(rows) - 1))
+
+    def move_host(self, delta):
+        n = len(self.host_aliases)
+        if n <= 0:
+            self.host_index = 0
+            return
+        self.sync_hosts()
+        self.host_index = (self.host_index + delta) % n
+        self.selected_alias = self.host_aliases[self.host_index]
+
+    def move_proc(self, delta, rows):
+        if not rows:
+            self.proc_index = 0
+            return
+        self.sync_procs(rows)
+        self.proc_index = max(0, min(len(rows) - 1, self.proc_index + delta))
+        self.selected_proc = row_key(rows[self.proc_index])
+
+
+def row_key(row):
+    """Identity of a process row, stable across re-sorts."""
+    return (row["host"], row["gpu"], row["pid"])
 
 
 def process_rows(results, state):

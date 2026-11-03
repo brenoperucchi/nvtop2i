@@ -11,6 +11,8 @@ import time
 from . import server as srv
 
 MAX_BACKOFF = 30
+NO_GPU_DELAY = 30          # hosts without a GPU rarely change; poll them slowly
+DISCOVERY_EVERY = 60       # seconds between Gadi compute node discoveries
 
 
 def poll_delay(interval, fails):
@@ -40,23 +42,41 @@ class _HostWorker(threading.Thread):
                     pass
         self.client = self.jump_client = None
 
+    def _error_result(self, exc):
+        result = srv._new_result(self.host_info)
+        result["error"] = srv._error_text(exc)
+        return result
+
+    def _query(self):
+        """Poll over the open connection, connecting first when needed."""
+        if self.client is None:
+            self.client, self.jump_client = srv.open_connection(
+                self.host_info, self.hosts_by_alias)
+            transport = self.client.get_transport()
+            if transport:
+                transport.set_keepalive(15)
+        return srv.run_on_client(self.client, self.host_info)
+
     def poll(self):
-        """One poll: reuse the connection, open it when missing."""
+        """One poll. A dropped connection gets one immediate retry on a new one."""
         if self.host_info.get("is_local"):
             return srv.query_local_gpu()
+        reused = self.client is not None
         try:
-            if self.client is None:
-                self.client, self.jump_client = srv.open_connection(
-                    self.host_info, self.hosts_by_alias)
-                transport = self.client.get_transport()
-                if transport:
-                    transport.set_keepalive(15)
-            return srv.run_on_client(self.client, self.host_info)
+            return self._query()
+        except (ValueError, KeyError, IndexError) as e:
+            # the host answered with something we cannot parse: the
+            # connection is fine, keep it
+            return self._error_result(e)
         except Exception as e:
             self._close()
-            result = srv._new_result(self.host_info)
-            result["error"] = srv._error_text(e)
-            return result
+            if not reused:
+                return self._error_result(e)
+        try:
+            return self._query()
+        except Exception as e:
+            self._close()
+            return self._error_result(e)
 
     def run(self):
         mon = self.monitor
@@ -67,7 +87,10 @@ class _HostWorker(threading.Thread):
                 break
             mon.publish(self.host_info["alias"], result)
             self.fails = 0 if result["status"] != "error" else self.fails + 1
-            wait = max(0.0, poll_delay(mon.interval(), self.fails) - (time.time() - started))
+            wait = poll_delay(mon.interval(), self.fails)
+            if result["status"] == "no_gpu":
+                wait = max(wait, NO_GPU_DELAY)
+            wait = max(0.0, wait - (time.time() - started))
             self.wake.wait(wait)
             self.wake.clear()
         self._close()
@@ -102,20 +125,31 @@ class Monitor:
         worker.start()
 
     def _setup(self):
-        """Read the SSH config and start one worker per host."""
+        """Start one worker per host of the SSH config, then keep looking for
+        dynamically allocated nodes (Gadi) in the background."""
         try:
             hosts = srv.parse_ssh_config(srv.SSH_CONFIG_PATH)
-            by_alias = {h["alias"]: h for h in hosts}
-            for h in srv.discover_gadi_nodes(by_alias):
-                if h["alias"] not in by_alias:
-                    hosts.append(h)
-                    by_alias[h["alias"]] = h
-        except Exception:
+        except Exception as e:
+            self._publish_problem("(ssh config)", f"Cannot read {srv.SSH_CONFIG_PATH}: {e}")
             return
+        by_alias = {h["alias"]: h for h in hosts}
         for host_info in hosts:
             if self.stopped.is_set():
                 return
             self._spawn(host_info, by_alias)
+        while not self.stopped.is_set():
+            try:
+                for h in srv.discover_gadi_nodes(by_alias):
+                    if h["alias"] not in by_alias and not self.stopped.is_set():
+                        by_alias[h["alias"]] = h
+                        self._spawn(h, by_alias)
+            except Exception:
+                pass   # discovery is best effort; configured hosts keep working
+            self.stopped.wait(DISCOVERY_EVERY)
+
+    def _publish_problem(self, alias, message):
+        self.publish(alias, {"alias": alias, "hostname": alias, "user": "", "port": 0,
+                             "status": "error", "error": message, "gpus": []})
 
     def stop(self):
         self.stopped.set()

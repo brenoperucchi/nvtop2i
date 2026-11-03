@@ -90,26 +90,122 @@ def test_snapshot_has_local_and_remote_hosts_sorted_with_age(fake_server):
     assert m.last_update() > 0
 
 
-def test_failure_closes_connection_and_reconnects(fake_server):
-    def flaky(n):
+def test_a_single_dropped_connection_is_retried_without_going_offline(fake_server):
+    def drops_once(n):
         if n == 2:
             raise OSError("connection reset")
         return ok_result("alpha")
-    fake_server["behaviour"]["alpha"] = flaky
+    fake_server["behaviour"]["alpha"] = drops_once
+
+    seen = []
+    m = mon.Monitor(interval=lambda: 0.02, on_result=lambda r: seen.append(
+        (r["alias"], r["status"])))
+    m.start()
+    try:
+        assert wait_for(lambda: fake_server["polls"].get("alpha", 0) >= 5)
+    finally:
+        m.stop()
+    assert fake_server["opens"]["alpha"] == 2               # reconnected once
+    assert fake_server["clients"][0].closed                 # the dead one was closed
+    assert ("alpha", "error") not in seen                   # no Offline flicker
+
+
+def test_persistent_failure_is_reported_and_then_recovers(fake_server):
+    def down_then_up(n):
+        if n in (2, 3):
+            raise OSError("connection reset")
+        return ok_result("alpha")
+    fake_server["behaviour"]["alpha"] = down_then_up
 
     seen = []
     m = mon.Monitor(interval=lambda: 0.02, on_result=lambda r: seen.append(
         (r["alias"], r["status"], r["error"])))
     m.start()
     try:
-        assert wait_for(lambda: fake_server["opens"].get("alpha", 0) >= 2)
+        assert wait_for(lambda: fake_server["polls"].get("alpha", 0) >= 6)
+    finally:
+        m.stop()
+    alpha = [x for x in seen if x[0] == "alpha"]
+    assert ("alpha", "error", "Connection failed: connection reset") in alpha
+    assert alpha[-1][1] == "ok"
+
+
+def test_unparsable_answer_keeps_the_connection(fake_server):
+    def garbled(n):
+        if n == 2:
+            raise ValueError("could not convert string to float: '[N/A]'")
+        return ok_result("alpha")
+    fake_server["behaviour"]["alpha"] = garbled
+
+    seen = []
+    m = mon.Monitor(interval=lambda: 0.02, on_result=lambda r: seen.append(
+        (r["alias"], r["status"], r["error"])))
+    m.start()
+    try:
         assert wait_for(lambda: fake_server["polls"].get("alpha", 0) >= 4)
     finally:
         m.stop()
-    alpha = [s for s in seen if s[0] == "alpha"]
-    assert ("alpha", "error", "Connection failed: connection reset") in alpha
-    assert alpha[-1][1] == "ok"                       # recovered
-    assert fake_server["clients"][0].closed           # dead connection was closed
+    assert fake_server["opens"]["alpha"] == 1
+    assert any(x[0] == "alpha" and x[1] == "error" and "ValueError" in x[2] for x in seen)
+
+
+def test_hosts_without_gpu_are_polled_slowly(fake_server, monkeypatch):
+    monkeypatch.setattr(mon, "NO_GPU_DELAY", 60)
+    fake_server["behaviour"]["alpha"] = lambda n: {
+        **ok_result("alpha"), "status": "no_gpu", "gpus": []}
+    m = mon.Monitor(interval=lambda: 0.02)
+    m.start()
+    try:
+        assert wait_for(lambda: fake_server["polls"].get("beta", 0) >= 5)
+    finally:
+        m.stop()
+    assert fake_server["polls"]["alpha"] == 1
+
+
+def test_unreadable_ssh_config_is_shown_instead_of_swallowed(fake_server, monkeypatch):
+    def boom(path):
+        raise ValueError("invalid literal for int() with base 10: '${PORT}'")
+    monkeypatch.setattr(srv, "parse_ssh_config", boom)
+    m = mon.Monitor(interval=lambda: 0.02)
+    m.start()
+    try:
+        assert wait_for(lambda: any(r["alias"] == "(ssh config)" for r in m.snapshot()))
+        row = next(r for r in m.snapshot() if r["alias"] == "(ssh config)")
+    finally:
+        m.stop()
+    assert row["status"] == "error" and "${PORT}" in row["error"]
+
+
+def test_nodes_discovered_later_get_a_worker_and_discovery_repeats(fake_server, monkeypatch):
+    monkeypatch.setattr(mon, "DISCOVERY_EVERY", 0.05)
+    calls = []
+
+    def discover(by_alias):
+        calls.append(1)
+        if len(calls) < 3:
+            return []
+        return [{"alias": "gadi-gpu-1", "hostname": "gadi-gpu-1", "user": "u",
+                 "port": 22, "identity_file": None}]
+    monkeypatch.setattr(srv, "discover_gadi_nodes", discover)
+    m = mon.Monitor(interval=lambda: 0.02)
+    m.start()
+    try:
+        assert wait_for(lambda: fake_server["polls"].get("gadi-gpu-1", 0) >= 2)
+    finally:
+        m.stop()
+    assert len(calls) >= 3
+
+
+def test_slow_discovery_does_not_delay_the_configured_hosts(fake_server, monkeypatch):
+    release = threading.Event()
+    monkeypatch.setattr(srv, "discover_gadi_nodes", lambda by_alias: release.wait(5) and [])
+    m = mon.Monitor(interval=lambda: 0.02)
+    m.start()
+    try:
+        assert wait_for(lambda: fake_server["polls"].get("alpha", 0) >= 3)
+    finally:
+        release.set()
+        m.stop()
 
 
 def test_slow_host_does_not_block_the_others(fake_server):
@@ -177,6 +273,13 @@ def test_poll_delay_grows_with_failures_up_to_a_cap():
         assert real.poll_delay(60, 3) == 60
     finally:
         importlib.reload(mon)
+
+
+def test_connecting_placeholders_sort_after_ok_hosts():
+    rows = [{"alias": "c", "status": "error", "gpus": []},
+            {"alias": "b", "status": "connecting", "gpus": []},
+            {"alias": "a", "status": "ok", "gpus": []}]
+    assert [r["alias"] for r in srv._sort_results(rows)] == ["a", "b", "c"]
 
 
 def test_query_gpu_still_returns_error_text(monkeypatch):

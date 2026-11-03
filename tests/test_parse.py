@@ -109,3 +109,20 @@ def test_remote_command_runs_through_a_shell():
     assert out.returncode == 0
     gpu_part, _, vendor = server._parse_combined_output(out.stdout.strip())
     assert vendor in ("nvidia", "mx", "tpu")
+
+
+def test_na_in_core_fields_does_not_drop_the_gpu():
+    line = "0, NVIDIA GeForce RTX 5090, 32607, [N/A], [N/A], [N/A], [N/A], 2400, 14000, [N/A], [N/A], [N/A], [N/A], [N/A]"
+    g = server._build_gpus(line)[0]
+    assert g["memory_used_mb"] == 0 and g["gpu_utilization_pct"] == 0
+    assert g["temperature_c"] == 0 and g["memory_usage_pct"] == 0
+    assert g["memory_total_mb"] == 32607
+
+
+def test_script_keeps_commands_off_stdin():
+    # bash reads the script from stdin on remote hosts, so a command that read
+    # stdin would swallow the rest of it
+    assert server.COMBINED_CMD.rstrip().endswith("fi </dev/null")
+    script = "if true; then cat; echo after-cat; fi </dev/null"
+    out = subprocess.run(["bash"], input=script, capture_output=True, text=True, timeout=10)
+    assert "after-cat" in out.stdout
