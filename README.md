@@ -23,7 +23,7 @@ Each GPU gets the familiar nvtop header (clocks, temperature, fan, power, PCIe l
  │ lab-server 0   41200   wsl           C    31.0GiB  69% ollama                            │
  │ localhost  0   3093    me            G     515MiB  35% Hyprland                          │
  └──────────────────────────────────────────────────────────────────────────────────────────┘
- F2 Hosts  F3 Sort:mem  F4 Filter  F5 Kill  F6 Interval:2s  F8 Compact  F10 Quit
+ h Hosts  s Sort:mem  f Filter  F5 Kill  i Interval:2s  c Compact  v View:procs  q Quit
 ```
 
 ## Install
