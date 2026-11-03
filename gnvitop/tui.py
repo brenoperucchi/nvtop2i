@@ -7,7 +7,6 @@ layout testable without a terminal.
 
 import curses
 import os
-import threading
 import time
 from collections import namedtuple
 
@@ -241,7 +240,7 @@ def _gpu_compact(alias, gpu, history, width, host_w):
     return _fit(segs, width - 1)
 
 
-def _host_header(host, selected, collapsed, width):
+def _host_header(host, selected, collapsed, width, stale_after=None):
     badge, role = _badge(host)
     arrow = "▸" if collapsed else "▾"
     segs = [(f" {arrow} ", "white"),
@@ -251,6 +250,9 @@ def _host_header(host, selected, collapsed, width):
         segs.append(("  " + str(host.get("error") or "unknown error"), "red"))
     elif host["status"] == "no_gpu" and host.get("error"):
         segs.append(("  " + str(host["error"]), "dim"))
+    age = host.get("age_s")
+    if stale_after and age is not None and age > stale_after:
+        segs.append((f"  no update for {age:.0f}s", "yellow"))
     return _fit(segs, width - 1)
 
 
@@ -315,7 +317,8 @@ def _gpu_section(results, history, state, width, compact):
         collapsed = host["alias"] in state.collapsed
         ok = host["status"] == "ok"
         if not compact or not ok:
-            lines.append(_host_header(host, hi == state.host_index, collapsed, width))
+            lines.append(_host_header(host, hi == state.host_index, collapsed, width,
+                                      max(10, 3 * state.refresh_interval)))
         if not ok or collapsed:
             if not compact:
                 lines.append([])
@@ -455,28 +458,9 @@ def _handle_key(key, state, screen):
     return None
 
 
-def _tui_main(stdscr, fetch_fn, refresh_interval):
+def _tui_main(stdscr, monitor, history, state):
     curses.curs_set(0)
     attrs = _init_attrs()
-    state = UIState(refresh_interval)
-    history = History()
-
-    data = []
-    meta = {"last_update": 0.0, "loading": True}
-    lock = threading.Lock()
-
-    def do_fetch():
-        with lock:
-            meta["loading"] = True
-        result = fetch_fn()
-        with lock:
-            data[:] = result
-            history.record(result)
-            meta["last_update"] = time.time()
-            meta["loading"] = False
-
-    threading.Thread(target=do_fetch, daemon=True).start()
-    next_refresh = time.time() + state.refresh_interval
     stdscr.keypad(True)
     stdscr.timeout(250)
     screen = Screen([], 0, [], False)
@@ -486,18 +470,13 @@ def _tui_main(stdscr, fetch_fn, refresh_interval):
         action = _handle_key(key, state, screen) if key != -1 else None
         if action == "quit":
             break
-        with lock:
-            busy = meta["loading"]
-        if action == "interval":
-            next_refresh = time.time() + state.refresh_interval
-        if (action == "refresh" or time.time() >= next_refresh) and not busy:
-            threading.Thread(target=do_fetch, daemon=True).start()
-            next_refresh = time.time() + state.refresh_interval
+        if action in ("refresh", "interval"):
+            monitor.refresh()
 
         h, w = stdscr.getmaxyx()
-        with lock:
-            snapshot, snap_meta = list(data), dict(meta)
-            screen = build_screen(snapshot, history, state, w, h, snap_meta)
+        data = monitor.snapshot()
+        meta = {"last_update": monitor.last_update(), "loading": not data}
+        screen = build_screen(data, history, state, w, h, meta)
         _paint(stdscr, screen, attrs)
 
 
@@ -507,10 +486,16 @@ def run_tui(ssh_config_path=None, refresh_interval=2):
     if ssh_config_path:
         srv.SSH_CONFIG_PATH = ssh_config_path
 
-    from .server import fetch_all_gpu_info
+    from .monitor import Monitor
 
+    state = UIState(refresh_interval)
+    history = History()
+    monitor = Monitor(interval=lambda: state.refresh_interval, on_result=history.record_host)
+    monitor.start()
     os.environ.setdefault("ESCDELAY", "25")
     try:
-        curses.wrapper(_tui_main, fetch_all_gpu_info, refresh_interval)
+        curses.wrapper(_tui_main, monitor, history, state)
     except KeyboardInterrupt:
         pass
+    finally:
+        monitor.stop()

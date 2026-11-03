@@ -360,25 +360,70 @@ def _make_ssh_client(hostname, port, user, identity_file, sock=None):
     return client
 
 
-def query_gpu(host_info, hosts_by_alias=None):
-    """SSH into a host and query GPU information (single round trip).
+def _new_result(host_info):
+    alias = host_info["alias"]
+    return {
+        "alias": alias,
+        "hostname": host_info["hostname"] or alias,
+        "user": host_info["user"] or "unknown",
+        "port": host_info["port"],
+        "status": "error",
+        "error": None,
+        "gpus": [],
+    }
 
-    hosts_by_alias: dict of alias -> host_info for resolving ProxyJump targets.
+
+def _fill_result(result, output):
+    """Parse the combined command output into `result` (status, gpus, error)."""
+    gpu_part, proc_part, vendor = _parse_combined_output(output)
+
+    if not gpu_part:
+        result["status"] = "no_gpu"
+        result["error"] = "No supported GPU found (tried nvidia-smi, mx-smi, and TPU)"
+        return result
+    if vendor == "mx":
+        gpus = _build_mx_gpus(gpu_part)
+        if proc_part:
+            _attach_mx_processes(gpus, proc_part)
+    elif vendor == "tpu":
+        gpus = _build_tpu_gpus(gpu_part)
+        if proc_part:
+            _attach_tpu_processes(gpus, proc_part)
+        result["is_tpu"] = True
+    else:
+        gpus = _build_nvidia(gpu_part, proc_part)
+    result["gpus"] = gpus
+    if gpus:
+        result["status"] = "ok"
+    else:
+        result["status"] = "no_gpu"
+        result["error"] = "No valid accelerator data returned"
+    return result
+
+
+def _error_text(exc):
+    """Short message for a failed connection or command."""
+    if isinstance(exc, paramiko.AuthenticationException):
+        return "Authentication failed"
+    if isinstance(exc, paramiko.SSHException):
+        return f"SSH error: {exc}"
+    if isinstance(exc, TimeoutError):
+        return "Connection timed out"
+    if isinstance(exc, OSError):
+        return f"Connection failed: {exc}"
+    return f"{type(exc).__name__}: {exc}"
+
+
+def open_connection(host_info, hosts_by_alias=None):
+    """Connect to a host, going through ProxyJump or ProxyCommand when set.
+
+    Returns (client, jump_client); jump_client is None without a jump host.
+    The caller closes both.
     """
     alias = host_info["alias"]
     hostname = host_info["hostname"] or alias
     user = host_info["user"]
     port = host_info["port"]
-
-    result = {
-        "alias": alias,
-        "hostname": hostname,
-        "user": user or "unknown",
-        "port": port,
-        "status": "error",
-        "error": None,
-        "gpus": [],
-    }
 
     jump_client = None
     try:
@@ -408,53 +453,47 @@ def query_gpu(host_info, hosts_by_alias=None):
             sock = paramiko.ProxyCommand(cmd)
 
         client = _make_ssh_client(hostname, port, user, host_info.get("identity_file"), sock=sock)
-
-        # Single exec_command for both GPU stats and process info
-        # Wrap in bash -c to avoid issues with non-bash login shells (e.g. fish)
-        _, stdout, _ = client.exec_command(_remote_command(), timeout=SSH_TIMEOUT)
-        output = stdout.read().decode("utf-8").strip()
-        client.close()
-
-        gpu_part, proc_part, vendor = _parse_combined_output(output)
-
-        if not gpu_part:
-            result["status"] = "no_gpu"
-            result["error"] = "No supported GPU found (tried nvidia-smi, mx-smi, and TPU)"
-        else:
-            if vendor == "mx":
-                gpus = _build_mx_gpus(gpu_part)
-                if proc_part:
-                    _attach_mx_processes(gpus, proc_part)
-            elif vendor == "tpu":
-                gpus = _build_tpu_gpus(gpu_part)
-                if proc_part:
-                    _attach_tpu_processes(gpus, proc_part)
-                result["is_tpu"] = True
-            else:
-                gpus = _build_nvidia(gpu_part, proc_part)
-            result["gpus"] = gpus
-            if gpus:
-                result["status"] = "ok"
-            else:
-                result["status"] = "no_gpu"
-                result["error"] = "No valid accelerator data returned"
-
-    except paramiko.AuthenticationException:
-        result["error"] = "Authentication failed"
-    except paramiko.SSHException as e:
-        result["error"] = f"SSH error: {e}"
-    except TimeoutError:
-        result["error"] = "Connection timed out"
-    except OSError as e:
-        result["error"] = f"Connection failed: {e}"
-    except Exception as e:
-        result["error"] = f"{type(e).__name__}: {e}"
-    finally:
+        return client, jump_client
+    except Exception:
         if jump_client:
             try:
                 jump_client.close()
             except Exception:
                 pass
+        raise
+
+
+def run_on_client(client, host_info):
+    """Run the GPU query on an open connection and return the host result.
+
+    Each call opens a new channel, so one connection serves many polls.
+    Connection problems propagate; the caller decides whether to reconnect.
+    """
+    result = _new_result(host_info)
+    _, stdout, _ = client.exec_command(_remote_command(), timeout=SSH_TIMEOUT)
+    output = stdout.read().decode("utf-8").strip()
+    return _fill_result(result, output)
+
+
+def query_gpu(host_info, hosts_by_alias=None):
+    """SSH into a host and query GPU information (single round trip).
+
+    hosts_by_alias: dict of alias -> host_info for resolving ProxyJump targets.
+    """
+    result = _new_result(host_info)
+    client = jump_client = None
+    try:
+        client, jump_client = open_connection(host_info, hosts_by_alias)
+        result = run_on_client(client, host_info)
+    except Exception as e:
+        result["error"] = _error_text(e)
+    finally:
+        for c in (client, jump_client):
+            if c:
+                try:
+                    c.close()
+                except Exception:
+                    pass
 
     return result
 
@@ -560,30 +599,7 @@ def query_local_gpu():
         output = subprocess.run(
             COMBINED_CMD, shell=True, capture_output=True, text=True, timeout=30
         ).stdout.strip()
-
-        gpu_part, proc_part, vendor = _parse_combined_output(output)
-
-        if not gpu_part:
-            result["status"] = "no_gpu"
-            result["error"] = "No supported GPU found (tried nvidia-smi, mx-smi, and TPU)"
-        else:
-            if vendor == "mx":
-                gpus = _build_mx_gpus(gpu_part)
-                if proc_part:
-                    _attach_mx_processes(gpus, proc_part)
-            elif vendor == "tpu":
-                gpus = _build_tpu_gpus(gpu_part)
-                if proc_part:
-                    _attach_tpu_processes(gpus, proc_part)
-                result["is_tpu"] = True
-            else:
-                gpus = _build_nvidia(gpu_part, proc_part)
-            result["gpus"] = gpus
-            if gpus:
-                result["status"] = "ok"
-            else:
-                result["status"] = "no_gpu"
-                result["error"] = "No valid accelerator data returned"
+        _fill_result(result, output)
 
     except FileNotFoundError:
         result["status"] = "no_gpu"

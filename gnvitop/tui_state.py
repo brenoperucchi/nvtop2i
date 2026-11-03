@@ -3,6 +3,7 @@
 Nothing here touches curses, so it can be tested without a terminal.
 """
 
+import threading
 from collections import deque
 
 HISTORY_LEN = 40
@@ -34,17 +35,21 @@ def sparkline(values, width, lo=0.0, hi=100.0):
 
 
 class History:
-    """GPU%, MEM% and temperature samples per (host alias, gpu index)."""
+    """GPU%, MEM% and temperature samples per (host alias, gpu index).
+
+    Workers add samples from their own threads while the UI reads them.
+    """
 
     def __init__(self, maxlen=HISTORY_LEN):
         self.maxlen = maxlen
         self._series = {}
+        self._lock = threading.Lock()
 
-    def record(self, results):
-        """Add one sample for every GPU of every host that answered."""
-        for host in results:
-            if host.get("status") != "ok":
-                continue
+    def record_host(self, host):
+        """Add one sample for every GPU of a host that answered."""
+        if host.get("status") != "ok":
+            return
+        with self._lock:
             for gpu in host.get("gpus", []):
                 key = (host["alias"], gpu["index"])
                 s = self._series.setdefault(key, {
@@ -56,9 +61,14 @@ class History:
                 s["mem"].append(gpu.get("memory_usage_pct"))
                 s["temp"].append(gpu.get("temperature_c"))
 
+    def record(self, results):
+        for host in results:
+            self.record_host(host)
+
     def series(self, alias, index, name):
-        s = self._series.get((alias, index))
-        return list(s[name]) if s else []
+        with self._lock:
+            s = self._series.get((alias, index))
+            return list(s[name]) if s else []
 
 
 class UIState:

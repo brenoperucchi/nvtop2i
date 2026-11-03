@@ -94,9 +94,9 @@ def main():
     parser.add_argument(
         "--tui-refresh",
         type=int,
-        default=30,
+        default=2,
         metavar="SECONDS",
-        help="TUI auto-refresh interval in seconds (default: 30)",
+        help="TUI auto-refresh interval in seconds (default: 2)",
     )
     parser.add_argument(
         "--agent",

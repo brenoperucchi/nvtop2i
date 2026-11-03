@@ -210,3 +210,13 @@ def test_key_handling():
     tui._handle_key(curses.KEY_F4, st, scr)
     tui._handle_key(27, st, scr)
     assert not st.filtering and st.filter_text == ""
+
+
+def test_host_without_recent_update_is_marked_stale():
+    res = results()
+    res[0]["age_s"] = 45.0     # interval 2 s: stale after max(10, 6) s
+    res[1]["age_s"] = 1.0
+    _, text = render(res, 160, 60)
+    joined = "\n".join(text)
+    assert "localhost [Local]  no update for 45s" in joined
+    assert "ryzen9 [Online]  no update" not in joined
