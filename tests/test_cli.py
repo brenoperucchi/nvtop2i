@@ -2,6 +2,11 @@ import sys
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _no_real_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("NVTOP2I_CONFIG", str(tmp_path / "none.ini"))
+
 from nvtop2i import cli
 
 

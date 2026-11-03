@@ -10,6 +10,7 @@ import subprocess
 import paramiko
 
 SSH_CONFIG_PATH = os.path.expanduser("~/.ssh/config")
+HOSTS_LOADER = None   # when set, called instead of reading SSH_CONFIG_PATH
 SSH_TIMEOUT = 45
 
 # ── nvidia-smi queries ────────────────────────────────────────────────────────

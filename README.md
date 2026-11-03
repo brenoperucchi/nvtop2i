@@ -43,12 +43,27 @@ It is written in Python 3 (developed on 3.13) and depends on `paramiko`. Each mo
 ## Usage
 
 ```
-nvtop2i                          # local GPUs plus every Host in ~/.ssh/config
-nvtop2i --ssh-config ./gpu_hosts # use another SSH config file
+nvtop2i --setup                  # answer a few questions; hosts are saved for next time
+nvtop2i                          # local GPUs plus the hosts from the config
 nvtop2i -r 5                     # refresh every 5 seconds (default 2, minimum 1)
+nvtop2i --ssh-config ./gpu_hosts # use an SSH config file instead of the nvtop2i config
 ```
 
-The local machine is always included. Every `Host` entry in the SSH config is polled, so a config that lists only the machines with GPUs works best. `ProxyJump` and `ProxyCommand` are supported.
+The first run without a config offers to start the setup. It asks for each host's name, address, user, port, private key and optional jump host, then tests the connection. If the key is rejected it can install your public key using the password once; the password is not saved. The result goes to `~/.config/nvtop2i/config.ini` (or `$XDG_CONFIG_HOME/nvtop2i/config.ini`, or the path in `NVTOP2I_CONFIG`) with owner-only permissions:
+
+```ini
+[general]
+refresh = 2
+
+[host lab]
+hostname = 10.0.0.5
+user = me
+port = 22
+identity_file = ~/.ssh/id_ed25519
+proxy_jump = bastion
+```
+
+You can edit the file by hand. The local machine is always included. With `--ssh-config`, every `Host` entry of that file is polled instead, so a file that lists only the machines with GPUs works best. `ProxyJump` and `ProxyCommand` are supported there.
 
 Each host has its own thread and keeps one SSH connection open, so a slow or dead host only affects its own row. After a failure the connection is retried with a growing delay. A host that has not answered for three refresh intervals (at least 10 seconds) is marked with the time since its last update.
 
@@ -58,12 +73,12 @@ Each host has its own thread and keeps one SSH connection open, so a slow or dea
 |---|---|
 | `←` `→` | select a host |
 | `↑` `↓` | select a process |
-| `F2` | fold or unfold the selected host |
-| `F3` | cycle the process sort (process table only): memory, GPU %, PID, user, host |
-| `F4` | filter processes (process table only) by host, user or command (Enter applies, Esc clears) |
-| `F6` | next refresh interval: 1, 2, 5, 10 or 30 seconds |
-| `F8` | compact view, one line per GPU |
-| `F9` | switch between the GPU charts (default) and the process table |
+| `h` / `F2` | fold or unfold the selected host |
+| `s` / `F3` | cycle the process sort (process table only): memory, GPU %, PID, user, host |
+| `f` or `/` / `F4` | filter processes (process table only) by host, user or command (Enter applies, Esc clears) |
+| `i` / `F6` | next refresh interval: 1, 2, 5, 10 or 30 seconds |
+| `c` / `F8` | compact view, one line per GPU |
+| `v` or `Tab` / `F9` | switch between the GPU charts (default) and the process table |
 | `r` | refresh now |
 | `F10`, `q` | quit |
 

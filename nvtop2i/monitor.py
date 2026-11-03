@@ -128,7 +128,8 @@ class Monitor:
         """Start one worker per host of the SSH config, then keep looking for
         dynamically allocated nodes (Gadi) in the background."""
         try:
-            hosts = srv.parse_ssh_config(srv.SSH_CONFIG_PATH)
+            hosts = (srv.HOSTS_LOADER() if srv.HOSTS_LOADER
+                     else srv.parse_ssh_config(srv.SSH_CONFIG_PATH))
         except Exception as e:
             self._publish_problem("(ssh config)", f"Cannot read {srv.SSH_CONFIG_PATH}: {e}")
             return
