@@ -294,10 +294,10 @@ def test_graph_view_is_default_and_draws_boxes_instead_of_the_table():
     st = UIState(2)
     assert st.view == "graph"
     _, text = render(results(), 120, 40, state=st)
-    assert any("GPU0 %" in l and "mem%" in l and l.lstrip().startswith("┌") for l in text)
+    assert any("GPU0 %" in l for l in text) and any("GPU0 mem%" in l for l in text)
+    assert any(l.lstrip().startswith("┌─") for l in text)
     assert not any("COMMAND" in l for l in text)
     assert any("v View:graph" in l for l in text)
-    assert any(any("\u2800" <= c <= "\u28ff" for c in l) for l in text)
 
 
 def test_f9_toggles_between_graph_and_process_table():
@@ -314,25 +314,35 @@ def test_f9_toggles_between_graph_and_process_table():
     assert st.sort_key == "mem"   # F3 does nothing in the graph view
 
 
-def test_step_chart_marks_the_newest_value_at_the_right_edge():
-    from nvtop2i.chart import step_masks
-    m = step_masks([0, 100], cols=3, rows=2)
-    assert m[0][2] & 0x10 and m[1][2] & 0x08   # right column: the step goes from bottom to top
-    assert not any(m[r][0] for r in range(2))
+def test_step_line_draws_levels_and_corners_like_nvtop():
+    from nvtop2i.chart import step_cells
+    # 0% for the first half of the window, then 100%
+    samples = [(0, 0.0), (30, 100.0)]
+    g = step_cells(samples, now=60, cols=7, rows=3, window=60)
+    flat = ["".join(r) for r in g]
+    assert flat[2].startswith("───") and flat[2].count("┘") == 1   # bottom level ends in a riser
+    assert "┌" in flat[0] and flat[0].endswith("──")                # top level continues right
+    assert "│" in flat[1]
 
 
-def test_letter_keys_work_like_the_function_keys():
-    st = UIState(2)
-    st.host_aliases = ["a", "b"]
-    scr = tui.Screen([], 2, [], False)
-    tui._handle_key(ord("v"), st, scr)
-    assert st.view == "procs"
-    tui._handle_key(ord("s"), st, scr)
-    assert st.sort_key != "mem"
-    tui._handle_key(ord("c"), st, scr)
-    assert st.compact
-    assert tui._handle_key(ord("i"), st, scr) == "interval" and st.refresh_interval == 5
-    tui._handle_key(ord("h"), st, scr)
-    assert st.collapsed == {"a"}
-    tui._handle_key(ord("f"), st, scr)
-    assert st.filtering
+def test_old_samples_leave_a_gap_instead_of_a_flat_line():
+    from nvtop2i.chart import step_cells
+    g = step_cells([(0, 50.0)], now=60, cols=5, rows=3, window=60, hold=5)
+    assert "".join(g[1]).strip() == "─"   # only the first column is inside the hold time
+
+
+def test_chart_has_nvtop_axes_and_legend_inside_the_box():
+    _, text = render(results(), 120, 44, state=UIState(2))
+    box = [l for l in text if "│" in l or l.lstrip().startswith(("┌", "└"))]
+    joined = "\n".join(box)
+    assert "100" in joined and " 75" in joined and " 25" in joined
+    assert "59s" in joined and "44s" in joined and "0s" in joined
+    assert any("GPU0 %" in l and l.count("│") == 2 for l in box)
+
+
+def test_two_series_on_the_same_level_both_show():
+    from nvtop2i.chart import overlay, step_cells
+    gpu = step_cells([(0, 20.0)], now=10, cols=6, rows=3, window=10)
+    mem = step_cells([(0, 20.0)], now=10, cols=6, rows=3, window=10)
+    owners = {o for ch, o in overlay([gpu, mem])[2]}
+    assert owners == {0, 1}

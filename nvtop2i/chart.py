@@ -1,50 +1,66 @@
-"""Braille step charts for the graph view. Pure functions, no curses."""
+"""Step charts drawn with line characters, like nvtop's history graph. Pure functions."""
 
-# Dot bits of a braille cell: (column, row from the top) -> bit.
-_BITS = ((0x01, 0x02, 0x04, 0x40), (0x08, 0x10, 0x20, 0x80))
+from bisect import bisect_right
+
+WINDOW_S = 60
 
 
-def step_masks(values, cols, rows, lo=0.0, hi=100.0):
-    """Braille masks (rows x cols) for a step line through the last 2*cols values.
+def step_cells(samples, now, cols, rows, window=WINDOW_S, hold=None, lo=0.0, hi=100.0):
+    """Grid (rows x cols) of characters for one series.
 
-    The newest value sits at the right edge; a short history leaves the left side
-    empty. None draws nothing at that x. Values outside lo..hi are clamped.
+    `samples` is a list of (timestamp, value) in time order. Column 0 is `window`
+    seconds before `now`, the last column is `now`. A sample is held until the next
+    one arrives, but not longer than `hold` seconds (None: no limit), so a host
+    that went quiet leaves a gap instead of a flat line. Missing values draw nothing.
     """
-    masks = [[0] * cols for _ in range(rows)]
-    if cols <= 0 or rows <= 0:
-        return masks
-    dots_y = rows * 4
+    grid = [[" "] * cols for _ in range(rows)]
+    if cols <= 0 or rows <= 0 or not samples:
+        return grid
+    times = [t for t, _ in samples]
     span = (hi - lo) or 1.0
-    tail = list(values)[-cols * 2:]
-    offset = cols * 2 - len(tail)
-    prev = None
-    for i, v in enumerate(tail):
-        if v is None:
+    prev = None   # row of the previous column
+    for c in range(cols):
+        t = now - window * (cols - 1 - c) / max(1, cols - 1)
+        i = bisect_right(times, t) - 1
+        value = None
+        if i >= 0 and samples[i][1] is not None and (hold is None or t - times[i] <= hold):
+            value = samples[i][1]
+        if value is None:
             prev = None
             continue
-        frac = min(1.0, max(0.0, (v - lo) / span))
-        y = dots_y - 1 - int(round(frac * (dots_y - 1)))   # 0 is the top dot row
-        x = offset + i
-        lo_y, hi_y = (y, y) if prev is None else (min(prev, y), max(prev, y))
-        for yy in range(lo_y, hi_y + 1):
-            masks[yy // 4][x // 2] |= _BITS[x % 2][yy % 4]
+        frac = min(1.0, max(0.0, (value - lo) / span))
+        y = int(round((1 - frac) * (rows - 1)))
+        if prev is None or prev == y:
+            grid[y][c] = "─"
+        else:
+            top, bottom = min(prev, y), max(prev, y)
+            for r in range(top + 1, bottom):
+                grid[r][c] = "│"
+            if y < prev:   # going up: the old level turns up, the new one continues right
+                grid[prev][c], grid[y][c] = "┘", "┌"
+            else:
+                grid[prev][c], grid[y][c] = "┐", "└"
         prev = y
-    return masks
+    return grid
 
 
-def combine(layers):
-    """Merge mask layers into (char, layer index) cells; the first layer wins colour."""
-    rows, cols = len(layers[0]), len(layers[0][0]) if layers[0] else 0
+def overlay(layers):
+    """Merge grids into (char, layer index) cells.
+
+    When several layers want the same cell, they take turns column by column, so
+    two lines on the same level stay visible as a two-coloured dashed line.
+    """
+    rows = len(layers[0])
+    cols = len(layers[0][0]) if rows else 0
     out = []
     for r in range(rows):
         line = []
         for c in range(cols):
-            mask, owner = 0, 0
-            for li, layer in enumerate(layers):
-                if layer[r][c]:
-                    if not mask:
-                        owner = li
-                    mask |= layer[r][c]
-            line.append((chr(0x2800 + mask) if mask else " ", owner))
+            used = [li for li, layer in enumerate(layers) if layer[r][c] != " "]
+            if used:
+                li = used[c % len(used)]
+                line.append((layers[li][r][c], li))
+            else:
+                line.append((" ", 0))
         out.append(line)
     return out

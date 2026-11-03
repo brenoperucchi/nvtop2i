@@ -10,12 +10,12 @@ import os
 import time
 from collections import namedtuple
 
-from .chart import combine, step_masks
+from .chart import WINDOW_S, overlay, step_cells
 from .tui_state import History, UIState, process_rows, sparkline
 
 FULL_MIN_WIDTH = 100     # narrower terminals use the compact view
 CHART_MIN_LINES = 5      # border + 3 plot rows + border
-CHART_MAX_LINES = 12
+CHART_MAX_LINES = 18
 TABLE_MIN_LINES = 5      # border + header + one row + border + gap
 BAR = "|"
 
@@ -202,27 +202,32 @@ def _gpu_full(alias, gpu, history, width, chart_h=0, interval=2):
     return head + [_fit(line4, width - 1)]
 
 
-def _chart(history, alias, idx, width, height, interval):
-    """Box with GPU% and MEM% step lines (braille), 0..100 on the left axis."""
+def _chart(history, alias, idx, width, height, interval, now=None):
+    """nvtop-style box: the last 60 s of GPU% and mem% as thin step lines."""
+    now = time.time() if now is None else now
     label_w = 4
     inner = width - 1 - label_w - 2
     rows = height - 2
-    gs = history.series(alias, idx, "gpu")
-    ms = history.series(alias, idx, "mem")
-    cells = combine([step_masks(gs, inner, rows), step_masks(ms, inner, rows)])
+    hold = 3 * interval + 1
+    cells = overlay([step_cells(history.timed(alias, idx, "gpu"), now, inner, rows, hold=hold),
+                     step_cells(history.timed(alias, idx, "mem"), now, inner, rows, hold=hold)])
     roles = ("chart_gpu", "chart_mem")
-    ticks = {0: "100", rows - 1: "0"}
-    if rows >= 3:
-        ticks[rows // 2] = "50"
-    t1, t2 = f" GPU{idx} % ", f" GPU{idx} mem% "
-    fill = max(0, inner - len(t1) - len(t2) - 2)
-    lines = [[(" " * label_w + "┌─", "dim"), (t1, "chart_gpu"), ("─", "dim"),
-              (t2, "chart_mem"), ("─" * fill + "┐", "dim")]]
+    levels = (100, 75, 50, 25, 0) if rows >= 5 else (100, 50, 0)
+    ticks = {round(k * (rows - 1) / (len(levels) - 1)): str(v) for k, v in enumerate(levels)}
+    legend = {0: f" GPU{idx} %", 1: f" GPU{idx} mem%"} if rows >= 4 else {}
+
+    lines = [[(" " * label_w + "┌" + "─" * inner + "┐", "dim")]]
     for r in range(rows):
+        row = [list(c) for c in cells[r]]
+        text = legend.get(r, "")
+        role_of = roles[r] if r < 2 else "white"
         segs = [(f"{ticks.get(r, ''):>{label_w - 1}} ", "white"), ("│", "dim")]
         run, run_role = "", None
-        for ch, owner in cells[r]:
-            role = roles[owner] if ch != " " else "white"
+        for c, (ch, owner) in enumerate(row):
+            if c < len(text):
+                ch, role = text[c], role_of
+            else:
+                role = roles[owner] if ch != " " else "white"
             if role != run_role and run:
                 segs.append((run, run_role))
                 run = ""
@@ -231,10 +236,14 @@ def _chart(history, alias, idx, width, height, interval):
         segs.append((run, run_role))
         segs.append(("│", "dim"))
         lines.append(segs)
-    span = f"{int((min(len(gs), inner * 2) or 1) * interval)}s"
-    pad = max(0, inner - len(span) - 2)
-    lines.append([(" " * label_w + "└", "dim"), (span, "white"),
-                  ("─" * pad, "dim"), ("0s", "white"), ("┘", "dim")])
+
+    axis = ["─"] * inner
+    for k in range(5):
+        text = f"{int(WINDOW_S - 1) * (4 - k) // 4}s"
+        start = round(k * (inner - 1) / 4)
+        start = min(max(0, start - (len(text) - 1 if k == 4 else 0)), max(0, inner - len(text)))
+        axis[start:start + len(text)] = list(text)
+    lines.append([(" " * label_w + "└", "dim"), ("".join(axis), "white"), ("┘", "dim")])
     return [_fit(ln, width - 1) for ln in lines]
 
 

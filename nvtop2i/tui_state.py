@@ -4,6 +4,7 @@ Nothing here touches curses, so it can be tested without a terminal.
 """
 
 import threading
+import time
 from collections import deque
 
 HISTORY_LEN = 400   # enough for 2 samples per column of a wide chart
@@ -57,7 +58,9 @@ class History:
                     "gpu": deque(maxlen=self.maxlen),
                     "mem": deque(maxlen=self.maxlen),
                     "temp": deque(maxlen=self.maxlen),
+                    "t": deque(maxlen=self.maxlen),
                 })
+                s["t"].append(time.time())
                 s["gpu"].append(gpu.get("gpu_utilization_pct"))
                 s["mem"].append(gpu.get("memory_usage_pct"))
                 s["temp"].append(gpu.get("temperature_c"))
@@ -65,6 +68,12 @@ class History:
     def record(self, results):
         for host in results:
             self.record_host(host)
+
+    def timed(self, alias, index, name):
+        """(timestamp, value) pairs, oldest first."""
+        with self._lock:
+            s = self._series.get((alias, index))
+            return list(zip(s["t"], s[name])) if s else []
 
     def series(self, alias, index, name):
         with self._lock:
