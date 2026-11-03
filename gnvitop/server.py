@@ -6,7 +6,7 @@ import json
 import os
 import queue
 import re
-import shlex
+import base64
 import subprocess
 import time
 import threading
@@ -26,18 +26,19 @@ SSH_TIMEOUT = 45
 # ── nvidia-smi queries ────────────────────────────────────────────────────────
 _GPU_QUERY = (
     "nvidia-smi --query-gpu=index,name,memory.total,memory.used,memory.free,"
-    "utilization.gpu,temperature.gpu --format=csv,noheader,nounits 2>/dev/null"
+    "utilization.gpu,temperature.gpu,clocks.gr,clocks.mem,fan.speed,"
+    "power.draw,power.limit,pcie.link.gen.current,pcie.link.width.current"
+    " --format=csv,noheader,nounits 2>/dev/null"
 )
+# Raw pmon output (columns are located by header, they differ between drivers),
+# followed by a pid -> user table. The user column is widened so ps does not
+# cut long names to "name+".
 _PROC_QUERY = (
-    r"nvidia-smi pmon -c 1 -s m 2>/dev/null | tail -n +3"
-    r" | while read gpu pid type mem cmd; do"
-    r' if [ "$pid" != "-" ]; then'
-    r" user=$(ps -o user= -p $pid 2>/dev/null | tr -d ' ');"
-    r" comm=$(ps -o comm= -p $pid 2>/dev/null | tr -d ' ');"
-    r' [ "$mem" = "-" ] && mem=0;'
-    r' printf "%s,%s,%s,%s,%s\n" "$pid" "$gpu" "$mem" "$user" "$comm";'
-    r" fi; done"
+    "nvidia-smi pmon -c 1 -s um 2>/dev/null; echo '---PS---'; "
+    "ps -eo pid=,user:32= 2>/dev/null"
 )
+# PCIe throughput per GPU in MB/s (rx, tx)
+_DMON_QUERY = "nvidia-smi dmon -c 1 -s t 2>/dev/null"
 
 # ── TPU queries (Google Cloud TPU) ───────────────────────────────────────────
 _TPU_CHIP_QUERY = "ls /dev/accel* 2>/dev/null | wc -l"
@@ -65,6 +66,7 @@ _MX_PROC_QUERY = (
 COMBINED_CMD = (
     "if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then "
     "echo NVIDIA; " + _GPU_QUERY + "; echo '---SEP---'; " + _PROC_QUERY + "; "
+    "echo '---DMON---'; " + _DMON_QUERY + "; "
     "elif command -v mx-smi >/dev/null 2>&1; then "
     "echo MX; mx-smi 2>/dev/null; echo '---SEP---'; " + _MX_PROC_QUERY + "; "
     "elif ls /dev/accel0 >/dev/null 2>&1; then "
@@ -165,6 +167,17 @@ def _parse_combined_output(output):
     return gpu_part.strip(), proc_part.strip(), vendor
 
 
+def _num(text):
+    """Parse a nvidia-smi number; '[N/A]', '[Not Supported]' and '' become None."""
+    text = (text or "").strip()
+    if not text or text.startswith("["):
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
 def _build_gpus(gpu_part):
     """Parse GPU stats section into a list of GPU dicts."""
     gpus = []
@@ -177,6 +190,9 @@ def _build_gpus(gpu_part):
             mem_used = float(parts[3])
             mem_free = float(parts[4])
             utilization = float(parts[5])
+            extra = parts[7:] + [""] * (7 - len(parts[7:]))
+            pcie_gen = _num(extra[5])
+            pcie_width = _num(extra[6])
             gpus.append({
                 "index": int(parts[0]),
                 "name": parts[1],
@@ -186,6 +202,15 @@ def _build_gpus(gpu_part):
                 "memory_usage_pct": round(mem_used / mem_total * 100, 1) if mem_total > 0 else 0,
                 "gpu_utilization_pct": utilization,
                 "temperature_c": float(parts[6]),
+                "clock_gr_mhz": _num(extra[0]),
+                "clock_mem_mhz": _num(extra[1]),
+                "fan_pct": _num(extra[2]),
+                "power_w": _num(extra[3]),
+                "power_limit_w": _num(extra[4]),
+                "pcie_gen": int(pcie_gen) if pcie_gen is not None else None,
+                "pcie_width": int(pcie_width) if pcie_width is not None else None,
+                "pcie_rx_mbs": None,
+                "pcie_tx_mbs": None,
                 "processes": [],
             })
     return gpus
@@ -386,7 +411,7 @@ def query_gpu(host_info, hosts_by_alias=None):
 
         # Single exec_command for both GPU stats and process info
         # Wrap in bash -c to avoid issues with non-bash login shells (e.g. fish)
-        _, stdout, _ = client.exec_command("bash -c " + shlex.quote(COMBINED_CMD), timeout=SSH_TIMEOUT)
+        _, stdout, _ = client.exec_command(_remote_command(), timeout=SSH_TIMEOUT)
         output = stdout.read().decode("utf-8").strip()
         client.close()
 
@@ -406,9 +431,7 @@ def query_gpu(host_info, hosts_by_alias=None):
                     _attach_tpu_processes(gpus, proc_part)
                 result["is_tpu"] = True
             else:
-                gpus = _build_gpus(gpu_part)
-                if proc_part:
-                    _attach_processes(gpus, proc_part)
+                gpus = _build_nvidia(gpu_part, proc_part)
             result["gpus"] = gpus
             if gpus:
                 result["status"] = "ok"
@@ -437,23 +460,84 @@ def query_gpu(host_info, hosts_by_alias=None):
 
 
 def _attach_processes(gpus, proc_output):
-    """Parse process output and attach to matching GPUs (skip system users)."""
+    """Parse `pmon` + `ps` output and attach processes to GPUs (skip system users).
+
+    proc_output is the raw `nvidia-smi pmon -c 1 -s um` text, then a
+    '---PS---' line, then `ps -eo pid=,user:32=` lines. pmon columns are
+    located through its header because they differ between driver versions.
+    """
+    pmon_text, _, ps_text = proc_output.partition("---PS---")
+    users = {}
+    for line in ps_text.split("\n"):
+        bits = line.split()
+        if len(bits) >= 2 and bits[0].isdigit():
+            users[int(bits[0])] = bits[1]
+
     gpu_by_index = {g["index"]: g for g in gpus}
-    for line in proc_output.split("\n"):
-        parts = [p.strip() for p in line.split(",")]
-        if len(parts) >= 4 and parts[0].isdigit():
-            user = parts[3] if parts[3] else "unknown"
-            if user in SYSTEM_USERS:
-                continue
-            gpu_idx = int(parts[1])
-            proc = {
-                "pid": int(parts[0]),
-                "gpu_memory_mb": float(parts[2]) if parts[2] else 0,
-                "user": user,
-                "command": parts[4] if len(parts) >= 5 else "",
-            }
-            if gpu_idx in gpu_by_index:
-                gpu_by_index[gpu_idx]["processes"].append(proc)
+    names = None
+    for line in pmon_text.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            fields = line.lstrip("#").split()
+            if names is None and "pid" in fields:
+                names = fields
+            continue
+        if names is None:
+            continue
+        cols = line.split(None, len(names) - 1)
+        row = dict(zip(names, cols))
+        pid = row.get("pid", "-")
+        if not pid.isdigit() or not row.get("gpu", "").isdigit():
+            continue
+        user = users.get(int(pid), "unknown")
+        if user in SYSTEM_USERS:
+            continue
+        gpu_idx = int(row["gpu"])
+        proc = {
+            "pid": int(pid),
+            "gpu_memory_mb": _num(row.get("fb")) or 0,
+            "user": user,
+            "command": row.get("command", "").strip(),
+            "type": row.get("type", ""),
+            "sm_pct": _num(row.get("sm")),
+        }
+        if gpu_idx in gpu_by_index:
+            gpu_by_index[gpu_idx]["processes"].append(proc)
+
+
+def _attach_dmon(gpus, dmon_output):
+    """Attach PCIe RX/TX throughput (MB/s) from `nvidia-smi dmon -s t` output."""
+    gpu_by_index = {g["index"]: g for g in gpus}
+    for line in dmon_output.split("\n"):
+        bits = line.split()
+        if len(bits) >= 3 and bits[0].isdigit() and int(bits[0]) in gpu_by_index:
+            gpu = gpu_by_index[int(bits[0])]
+            gpu["pcie_rx_mbs"] = _num(bits[1])
+            gpu["pcie_tx_mbs"] = _num(bits[2])
+
+
+def _build_nvidia(gpu_part, proc_part):
+    """Build GPU dicts from the NVIDIA sections of the combined output."""
+    gpus = _build_gpus(gpu_part)
+    proc_part, _, dmon_part = proc_part.partition("---DMON---")
+    if proc_part.strip():
+        _attach_processes(gpus, proc_part)
+    if dmon_part.strip():
+        _attach_dmon(gpus, dmon_part)
+    return gpus
+
+
+def _remote_command():
+    """Command line that runs COMBINED_CMD on a remote host.
+
+    The script travels base64-encoded so it contains no quotes: single quotes
+    break on Windows OpenSSH servers whose default shell is cmd.exe. The script
+    is read from stdin by bash, so nothing inside it may read stdin.
+    """
+    encoded = base64.b64encode(COMBINED_CMD.encode("utf-8")).decode("ascii")
+    return 'bash -c "echo ' + encoded + ' | base64 -d | bash"'
 
 
 def query_local_gpu():
@@ -493,9 +577,7 @@ def query_local_gpu():
                     _attach_tpu_processes(gpus, proc_part)
                 result["is_tpu"] = True
             else:
-                gpus = _build_gpus(gpu_part)
-                if proc_part:
-                    _attach_processes(gpus, proc_part)
+                gpus = _build_nvidia(gpu_part, proc_part)
             result["gpus"] = gpus
             if gpus:
                 result["status"] = "ok"

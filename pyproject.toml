@@ -28,6 +28,9 @@ dependencies = [
     "paramiko>=2.0",
 ]
 
+[dependency-groups]
+dev = ["pytest>=7"]
+
 [project.scripts]
 gnvitop = "gnvitop.cli:main"
 
