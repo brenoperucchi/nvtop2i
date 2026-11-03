@@ -3,20 +3,19 @@ requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "gnvitop"
-version = "0.5.0"
-description = "Global nvitop: web-based GPU & TPU monitoring dashboard for all your remote servers via SSH"
+name = "nvtop2i"
+version = "0.1.0"
+description = "nvtop-style GPU monitor for the local machine and several hosts over SSH"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.7"
 authors = [
-    {name = "Linwei94"},
+    {name = "Breno Perucchi"},
 ]
-keywords = ["gpu", "tpu", "monitor", "nvidia", "ssh", "nvitop", "dashboard", "nvidia-smi", "metax", "cloud-tpu"]
+keywords = ["gpu", "tpu", "monitor", "nvidia", "ssh", "nvtop", "tui", "nvidia-smi", "metax", "cloud-tpu"]
 classifiers = [
     "Development Status :: 4 - Beta",
-    "Environment :: Console",
-    "Environment :: Web Environment",
+    "Environment :: Console :: Curses",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "Intended Audience :: System Administrators",
@@ -24,7 +23,6 @@ classifiers = [
     "Topic :: System :: Monitoring",
 ]
 dependencies = [
-    "flask>=2.0",
     "paramiko>=2.0",
 ]
 
@@ -32,12 +30,12 @@ dependencies = [
 dev = ["pytest>=7"]
 
 [project.scripts]
-gnvitop = "gnvitop.cli:main"
+nvtop2i = "nvtop2i.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["gnvitop*"]
+include = ["nvtop2i*"]
 
 [project.urls]
-Homepage = "https://github.com/Linwei94/gnvitop"
-Repository = "https://github.com/Linwei94/gnvitop"
-Issues = "https://github.com/Linwei94/gnvitop/issues"
+Homepage = "https://github.com/brenoperucchi/nvtop2i"
+Repository = "https://github.com/brenoperucchi/nvtop2i"
+Issues = "https://github.com/brenoperucchi/nvtop2i/issues"

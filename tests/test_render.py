@@ -1,7 +1,7 @@
 import pytest
 
-from gnvitop import tui
-from gnvitop.tui_state import History, UIState
+from nvtop2i import tui
+from nvtop2i.tui_state import History, UIState
 
 
 def gpu(i, name, util, mem_used, mem_total, temp, procs=(), **extra):

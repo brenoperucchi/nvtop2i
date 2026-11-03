@@ -8,7 +8,7 @@ reconnects with a growing delay.
 import threading
 import time
 
-from . import server as srv
+from . import probe as srv
 
 MAX_BACKOFF = 30
 NO_GPU_DELAY = 30          # hosts without a GPU rarely change; poll them slowly
@@ -24,7 +24,7 @@ def poll_delay(interval, fails):
 
 class _HostWorker(threading.Thread):
     def __init__(self, monitor, host_info, hosts_by_alias):
-        super().__init__(daemon=True, name=f"gnvitop-{host_info['alias']}")
+        super().__init__(daemon=True, name=f"nvtop2i-{host_info['alias']}")
         self.monitor = monitor
         self.host_info = host_info
         self.hosts_by_alias = hosts_by_alias
@@ -110,7 +110,7 @@ class Monitor:
     # -- lifecycle ----------------------------------------------------------
     def start(self):
         self._spawn({"alias": "localhost", "is_local": True}, {})
-        threading.Thread(target=self._setup, daemon=True, name="gnvitop-setup").start()
+        threading.Thread(target=self._setup, daemon=True, name="nvtop2i-setup").start()
 
     def _spawn(self, host_info, hosts_by_alias):
         # Show the host right away; a slow connection can take a long time.

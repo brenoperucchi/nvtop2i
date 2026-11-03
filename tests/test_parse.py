@@ -1,7 +1,7 @@
 import base64
 import subprocess
 
-from gnvitop import server
+from nvtop2i import probe
 
 GPU_OUT = """\
 0, NVIDIA GeForce RTX 3080 Ti, 12288, 3340, 8608, 20, 43, 300, 405, 45, 36.83, 300.00, 1, 8
@@ -41,7 +41,7 @@ DMON = """\
 
 
 def test_build_gpus_extended_columns():
-    gpus = server._build_gpus(GPU_OUT)
+    gpus = probe._build_gpus(GPU_OUT)
     assert len(gpus) == 2
     g = gpus[0]
     assert g["name"] == "NVIDIA GeForce RTX 3080 Ti"
@@ -56,20 +56,20 @@ def test_build_gpus_extended_columns():
 
 
 def test_build_gpus_na_values_become_none():
-    g = server._build_gpus(GPU_OUT_WSL)[0]
+    g = probe._build_gpus(GPU_OUT_WSL)[0]
     assert g["fan_pct"] is None and g["power_w"] is None
     assert g["power_limit_w"] is None and g["pcie_gen"] is None
     assert g["clock_gr_mhz"] == 2400
 
 
 def test_build_gpus_old_seven_columns():
-    g = server._build_gpus(GPU_OUT_OLD)[0]
+    g = probe._build_gpus(GPU_OUT_OLD)[0]
     assert g["name"] == "Tesla T4" and g["fan_pct"] is None
 
 
 def test_attach_processes_by_header_and_skips_system_users():
-    gpus = server._build_gpus(GPU_OUT)
-    server._attach_processes(gpus, PROC_OUT)
+    gpus = probe._build_gpus(GPU_OUT)
+    probe._attach_processes(gpus, PROC_OUT)
     procs = gpus[0]["processes"]
     assert [p["pid"] for p in procs] == [3093, 8064, 9000]
     assert procs[1]["type"] == "C+G" and procs[1]["gpu_memory_mb"] == 714
@@ -79,41 +79,41 @@ def test_attach_processes_by_header_and_skips_system_users():
 
 
 def test_attach_dmon():
-    gpus = server._build_gpus(GPU_OUT)
-    server._attach_dmon(gpus, DMON)
+    gpus = probe._build_gpus(GPU_OUT)
+    probe._attach_dmon(gpus, DMON)
     assert gpus[0]["pcie_rx_mbs"] == 3 and gpus[0]["pcie_tx_mbs"] == 15
 
 
 def test_build_nvidia_full_output():
     out = "NVIDIA\n" + GPU_OUT + "---SEP---\n" + PROC_OUT + "---DMON---\n" + DMON
-    gpu_part, proc_part, vendor = server._parse_combined_output(out)
+    gpu_part, proc_part, vendor = probe._parse_combined_output(out)
     assert vendor == "nvidia"
-    gpus = server._build_nvidia(gpu_part, proc_part)
+    gpus = probe._build_nvidia(gpu_part, proc_part)
     assert gpus[0]["pcie_tx_mbs"] == 15
     assert len(gpus[0]["processes"]) == 3
 
 
 def test_remote_command_has_no_single_quotes_and_roundtrips():
-    cmd = server._remote_command()
+    cmd = probe._remote_command()
     assert "'" not in cmd
     assert cmd.startswith('bash -c "echo ') and cmd.endswith(' | base64 -d | bash"')
     encoded = cmd[len('bash -c "echo '):-len(' | base64 -d | bash"')]
-    assert base64.b64decode(encoded).decode() == server.COMBINED_CMD
+    assert base64.b64decode(encoded).decode() == probe.COMBINED_CMD
     assert len(cmd) < 8000  # cmd.exe command line limit
 
 
 def test_remote_command_runs_through_a_shell():
     # sshd hands the string to the user's shell; emulate that with sh -c
-    out = subprocess.run(server._remote_command(), shell=True,
+    out = subprocess.run(probe._remote_command(), shell=True,
                          capture_output=True, text=True, timeout=60)
     assert out.returncode == 0
-    gpu_part, _, vendor = server._parse_combined_output(out.stdout.strip())
+    gpu_part, _, vendor = probe._parse_combined_output(out.stdout.strip())
     assert vendor in ("nvidia", "mx", "tpu")
 
 
 def test_na_in_core_fields_does_not_drop_the_gpu():
     line = "0, NVIDIA GeForce RTX 5090, 32607, [N/A], [N/A], [N/A], [N/A], 2400, 14000, [N/A], [N/A], [N/A], [N/A], [N/A]"
-    g = server._build_gpus(line)[0]
+    g = probe._build_gpus(line)[0]
     assert g["memory_used_mb"] == 0 and g["gpu_utilization_pct"] == 0
     assert g["temperature_c"] == 0 and g["memory_usage_pct"] == 0
     assert g["memory_total_mb"] == 32607
@@ -122,7 +122,7 @@ def test_na_in_core_fields_does_not_drop_the_gpu():
 def test_script_keeps_commands_off_stdin():
     # bash reads the script from stdin on remote hosts, so a command that read
     # stdin would swallow the rest of it
-    assert server.COMBINED_CMD.rstrip().endswith("fi </dev/null")
+    assert probe.COMBINED_CMD.rstrip().endswith("fi </dev/null")
     script = "if true; then cat; echo after-cat; fi </dev/null"
     out = subprocess.run(["bash"], input=script, capture_output=True, text=True, timeout=10)
     assert "after-cat" in out.stdout

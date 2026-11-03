@@ -1,24 +1,13 @@
 #!/usr/bin/env python3
-"""GPU Monitor - Flask server that reads SSH config and queries remote GPUs."""
+"""Probe hosts over SSH, and the local machine, for GPU data."""
 
-import getpass
-import json
-import os
-import queue
-import re
 import base64
+import getpass
+import os
+import re
 import subprocess
-import time
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from flask import Flask, jsonify, Response
 import paramiko
-
-from . import __version__
-from .dashboard import DASHBOARD_HTML
-
-app = Flask(__name__)
 
 SSH_CONFIG_PATH = os.path.expanduser("~/.ssh/config")
 SSH_TIMEOUT = 45
@@ -82,15 +71,6 @@ SYSTEM_USERS = frozenset({
     "root", "gdm", "lightdm", "sddm", "nvidia-persistenced",
     "Xorg", "gnome-shell",
 })
-
-cache = {"data": [], "last_update": 0}
-cache_lock = threading.Lock()
-CACHE_TTL = 30
-
-# Background refresh state
-_bg_refresh_running = False
-_bg_refresh_lock = threading.Lock()
-
 
 def parse_ssh_config(path):
     """Parse ~/.ssh/config and return a list of hosts."""
@@ -478,29 +458,6 @@ def run_on_client(client, host_info):
     return _fill_result(result, output)
 
 
-def query_gpu(host_info, hosts_by_alias=None):
-    """SSH into a host and query GPU information (single round trip).
-
-    hosts_by_alias: dict of alias -> host_info for resolving ProxyJump targets.
-    """
-    result = _new_result(host_info)
-    client = jump_client = None
-    try:
-        client, jump_client = open_connection(host_info, hosts_by_alias)
-        result = run_on_client(client, host_info)
-    except Exception as e:
-        result["error"] = _error_text(e)
-    finally:
-        for c in (client, jump_client):
-            if c:
-                try:
-                    c.close()
-                except Exception:
-                    pass
-
-    return result
-
-
 def _attach_processes(gpus, proc_output):
     """Parse `pmon` + `ps` output and attach processes to GPUs (skip system users).
 
@@ -667,125 +624,3 @@ def discover_gadi_nodes(hosts_by_alias):
             })
 
     return discovered
-
-
-def fetch_all_gpu_info():
-    """Query all hosts (local + remote) concurrently and return sorted results."""
-    hosts = parse_ssh_config(SSH_CONFIG_PATH)
-    hosts_by_alias = {h["alias"]: h for h in hosts}
-
-    # Discover dynamically allocated Gadi compute nodes
-    dynamic = discover_gadi_nodes(hosts_by_alias)
-    for h in dynamic:
-        if h["alias"] not in hosts_by_alias:
-            hosts.append(h)
-            hosts_by_alias[h["alias"]] = h
-
-    results = []
-    with ThreadPoolExecutor(max_workers=20) as executor:
-        futures = {executor.submit(query_local_gpu): None}
-        for h in hosts:
-            futures[executor.submit(query_gpu, h, hosts_by_alias)] = h
-        for future in as_completed(futures):
-            results.append(future.result())
-
-    return _sort_results(results)
-
-
-def _do_background_refresh():
-    """Run fetch_all_gpu_info and update cache; reset _bg_refresh_running flag when done."""
-    global _bg_refresh_running
-    try:
-        data = fetch_all_gpu_info()
-        with cache_lock:
-            cache["data"] = data
-            cache["last_update"] = time.time()
-    finally:
-        with _bg_refresh_lock:
-            _bg_refresh_running = False
-
-
-def _trigger_background_refresh():
-    """Spawn a background refresh thread if one isn't already running."""
-    global _bg_refresh_running
-    with _bg_refresh_lock:
-        if _bg_refresh_running:
-            return
-        _bg_refresh_running = True
-    t = threading.Thread(target=_do_background_refresh, daemon=True)
-    t.start()
-
-
-def _start_background_warmer():
-    """Background thread that keeps cache warm by refreshing every CACHE_TTL seconds."""
-    def _warmer():
-        # Initial warm-up: start immediately so first page load hits cached data
-        _do_background_refresh()
-        while True:
-            time.sleep(CACHE_TTL)
-            _do_background_refresh()
-
-    t = threading.Thread(target=_warmer, daemon=True)
-    t.start()
-
-
-@app.route("/")
-def index():
-    import socket
-    host_info = f"{getpass.getuser()}@{socket.gethostname()}"
-    html = DASHBOARD_HTML.replace("{{GNVITOP_HOST_INFO}}", host_info).replace("{{GNVITOP_VERSION}}", __version__)
-    return Response(html, mimetype="text/html")
-
-
-@app.route("/api/gpus")
-def api_gpus():
-    """Return cached data immediately; trigger background refresh if cache is stale."""
-    now = time.time()
-    with cache_lock:
-        data = cache["data"]
-        last_update = cache["last_update"]
-
-    if now - last_update > CACHE_TTL:
-        _trigger_background_refresh()
-
-    return jsonify({"hosts": data, "updated_at": last_update})
-
-
-@app.route("/api/refresh")
-def api_refresh():
-    """Force a synchronous refresh and return fresh data."""
-    with cache_lock:
-        cache["data"] = fetch_all_gpu_info()
-        cache["last_update"] = time.time()
-        return jsonify({"hosts": cache["data"], "updated_at": cache["last_update"]})
-
-
-@app.route("/api/stream")
-def api_stream():
-    """SSE endpoint: streams each host result as it arrives, then a 'done' event."""
-    def generate():
-        hosts = parse_ssh_config(SSH_CONFIG_PATH)
-        hosts_by_alias = {h["alias"]: h for h in hosts}
-        results = []
-
-        with ThreadPoolExecutor(max_workers=20) as executor:
-            futures = {executor.submit(query_local_gpu): None}
-            for h in hosts:
-                futures[executor.submit(query_gpu, h, hosts_by_alias)] = h
-
-            for future in as_completed(futures):
-                host_result = future.result()
-                results.append(host_result)
-                payload = json.dumps({"host": host_result})
-                yield f"data: {payload}\n\n"
-
-        # Update cache with fresh streamed data
-        sorted_results = _sort_results(results)
-        with cache_lock:
-            cache["data"] = sorted_results
-            cache["last_update"] = time.time()
-
-        yield f"data: {json.dumps({'done': True, 'updated_at': cache['last_update']})}\n\n"
-
-    return Response(generate(), mimetype="text/event-stream",
-                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

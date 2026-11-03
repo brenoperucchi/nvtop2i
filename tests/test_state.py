@@ -1,4 +1,4 @@
-from gnvitop.tui_state import History, UIState, process_rows, sparkline
+from nvtop2i.tui_state import History, UIState, process_rows, sparkline
 
 
 def test_sparkline_scales_and_pads():

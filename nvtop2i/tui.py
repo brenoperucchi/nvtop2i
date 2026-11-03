@@ -1,4 +1,4 @@
-"""Terminal UI for gnvitop: an nvtop-like view of several hosts, using curses.
+"""Terminal UI for nvtop2i: an nvtop-like view of several hosts, using curses.
 
 Layout code is pure: build_screen() returns lines made of (text, role)
 segments, and _paint() maps the roles to curses attributes. That keeps the
@@ -10,7 +10,7 @@ import os
 import time
 from collections import namedtuple
 
-from .tui_state import History, UIState, SORT_KEYS, process_rows, sparkline
+from .tui_state import History, UIState, process_rows, sparkline
 
 FULL_MIN_WIDTH = 100     # narrower terminals use the compact view
 TABLE_MIN_LINES = 5      # border + header + one row + border + gap
@@ -378,7 +378,7 @@ def build_screen(results, history, state, width, height, meta):
     state.host_aliases = [h["alias"] for h in results]
     state.sync_hosts()
     gpu_count = sum(len(h.get("gpus", [])) for h in results if h["status"] == "ok")
-    left = [(f" gnvitop  {gpu_count} GPUs on {len(results)} hosts", "title")]
+    left = [(f" nvtop2i  {gpu_count} GPUs on {len(results)} hosts", "title")]
     if meta.get("loading") and not meta.get("last_update"):
         right_txt = f"refresh {state.refresh_interval}s   updating..."
     else:
@@ -529,7 +529,7 @@ def _tui_main(stdscr, monitor, history, state):
 
 def run_tui(ssh_config_path=None, refresh_interval=2):
     """Launch the curses TUI dashboard."""
-    import gnvitop.server as srv
+    import nvtop2i.probe as srv
     if ssh_config_path:
         srv.SSH_CONFIG_PATH = ssh_config_path
 

@@ -3,9 +3,9 @@ import time
 
 import pytest
 
-from gnvitop import monitor as mon
-from gnvitop import server as srv
-from gnvitop.tui_state import History
+from nvtop2i import monitor as mon
+from nvtop2i import probe as srv
+from nvtop2i.tui_state import History
 
 
 def ok_result(alias, util=10):
@@ -280,11 +280,3 @@ def test_connecting_placeholders_sort_after_ok_hosts():
             {"alias": "b", "status": "connecting", "gpus": []},
             {"alias": "a", "status": "ok", "gpus": []}]
     assert [r["alias"] for r in srv._sort_results(rows)] == ["a", "b", "c"]
-
-
-def test_query_gpu_still_returns_error_text(monkeypatch):
-    def boom(*a, **k):
-        raise TimeoutError("slow")
-    monkeypatch.setattr(srv, "open_connection", boom)
-    r = srv.query_gpu({"alias": "x", "hostname": "x", "user": None, "port": 22})
-    assert r["status"] == "error" and r["error"] == "Connection timed out"
