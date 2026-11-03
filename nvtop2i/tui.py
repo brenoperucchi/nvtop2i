@@ -390,7 +390,7 @@ def _footer(state, width):
     if state.view == "graph":
         segs = [(" h Hosts  ", "white"), ("s Sort  f Filter  F5 Kill", "dim"),
                 (f"  i Interval:{state.refresh_interval}s  c Compact  v View:graph  q Quit", "white"),
-                ("    ←/→ host   (F2 F6 F8 F9 F10 also work)", "dim")]
+                ("    ←/→ host   F-keys work too", "dim")]
         return _fit(segs, width - 1)
     if state.filtering:
         segs = [(" Filter: ", "bold"), (state.filter_text + "_", "yellow"),

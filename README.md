@@ -1,55 +1,57 @@
 # nvtop2i
 
-A terminal GPU monitor in the style of [nvtop](https://github.com/Syllo/nvtop) that shows your own machine and any number of hosts reachable over SSH on one screen.
+A terminal GPU monitor in the style of [nvtop](https://github.com/Syllo/nvtop). It shows the GPUs of your own machine and of any hosts you can reach over SSH, all on one screen.
 
-Each GPU gets the familiar nvtop header (clocks, temperature, fan, power, PCIe link and throughput, utilization and memory bars) plus a short history graph. Below each GPU is a chart of its utilization and memory over the last minute or so. `F9` swaps the charts for a process table covering all hosts.
+![nvtop2i showing three GPUs on two hosts](docs/screenshot.png)
 
-```
- nvtop2i  3 GPUs on 2 hosts                                    refresh 2s   updated 12:02:24
- ────────────────────────────────────────────────────────────────────────────────────────────
-
- ▾ localhost [Local]
- Device 0 [NVIDIA GeForce RTX 3080 Ti]                  PCIe GEN 4@ 8x  RX: 5.4 MB/s  TX: 2.0 MB/s
- GPU 1230MHz  MEM 810MHz   TEMP 45°C  FAN 45%  POW 47 / 300 W
- GPU[|||||||||||||                             37%]  MEM[|||||||||            3.526Gi/12.000Gi]
- hist GPU ▁▂▃▅▇▆▅▃▂▁▂▃▅▆▇▅▃▂▁▂▃▅▇  MEM ▃▃▃▃▃▃▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  TEMP ▃▃▃▃▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-
- ▾ lab-server [Online]
- Device 0 [NVIDIA GeForce RTX 5090]                     PCIe GEN 4@16x  RX: 18.0 MB/s  TX: 19.0 MB/s
- ...
-
- ┌──────────────────────────────────────────────────────────────────────────────────────────┐
- │ HOST       GPU PID     USER          TYPE GPU MEM GPU% COMMAND                           │
- │ lab-server 0   41200   wsl           C    31.0GiB  69% ollama                            │
- │ localhost  0   3093    me            G     515MiB  35% Hyprland                          │
- └──────────────────────────────────────────────────────────────────────────────────────────┘
- h Hosts  s Sort:mem  f Filter  F5 Kill  i Interval:2s  c Compact  v View:procs  q Quit
-```
+Each GPU has the usual nvtop header: clocks, temperature, fan, power, PCIe link and throughput, plus utilization and memory bars. Under it sits a chart of the last 60 seconds of GPU and memory use. A second view lists the GPU processes of every host.
 
 ## Install
+
+You need Python 3 (developed on 3.13) and [uv](https://docs.astral.sh/uv/) or pip.
 
 ```
 uv tool install git+https://github.com/brenoperucchi/nvtop2i
 ```
 
-or with pip:
+With pip:
 
 ```
 pip install git+https://github.com/brenoperucchi/nvtop2i
 ```
 
-It is written in Python 3 (developed on 3.13) and depends on `paramiko`. Each monitored host needs `nvidia-smi` in the `PATH` of a non-interactive `bash`. SSH access has to work without a password prompt (keys or an agent).
+To update with uv, run `uv tool upgrade nvtop2i`.
 
-## Usage
+## Quick start
 
-```
-nvtop2i --setup                  # answer a few questions; hosts are saved for next time
-nvtop2i                          # local GPUs plus the hosts from the config
-nvtop2i -r 5                     # refresh every 5 seconds (default 2, minimum 1)
-nvtop2i --ssh-config ./gpu_hosts # use an SSH config file instead of the nvtop2i config
-```
+1. Run the setup once. It asks about each host and saves the answers:
 
-The first run without a config offers to start the setup. It asks for each host's name, address, user, port, private key and optional jump host, then tests the connection. If the key is rejected it can install your public key using the password once; the password is not saved. The result goes to `~/.config/nvtop2i/config.ini` (or `$XDG_CONFIG_HOME/nvtop2i/config.ini`, or the path in `NVTOP2I_CONFIG`) with owner-only permissions:
+   ```
+   nvtop2i --setup
+   ```
+
+2. From then on, start the monitor with:
+
+   ```
+   nvtop2i
+   ```
+
+The local GPUs are always shown, so the monitor works without any config if you only have one machine. If you start it with no config in a terminal, it offers to run the setup.
+
+### What the setup asks
+
+For every host it asks for a name, an address, a user, an SSH port, a private key and an optional jump host. It then connects and tells you how many GPUs it found. You can also import hosts from your `~/.ssh/config` and pick the ones you want.
+
+If the host rejects your key, the setup can copy your public key to it using your password once. The password is never written to disk. If you have no key yet, the setup can create an ed25519 one.
+
+### Requirements on each host
+
+- SSH login without a password prompt (a key or an agent).
+- `nvidia-smi` in the `PATH` of a non-interactive `bash`.
+
+## Config file
+
+The setup writes `~/.config/nvtop2i/config.ini`, readable only by you. It holds no passwords, only the path to your key. You can edit it by hand:
 
 ```ini
 [general]
@@ -63,24 +65,47 @@ identity_file = ~/.ssh/id_ed25519
 proxy_jump = bastion
 ```
 
-You can edit the file by hand. The local machine is always included. With `--ssh-config`, every `Host` entry of that file is polled instead, so a file that lists only the machines with GPUs works best. `ProxyJump` and `ProxyCommand` are supported there.
+| Setting | Meaning |
+|---|---|
+| `refresh` | Seconds between updates, at least 1 (default 2) |
+| `hostname` | Address of the host (default: the section name) |
+| `user` | SSH user (default: your current user) |
+| `port` | SSH port (default 22) |
+| `identity_file` | Private key to use (optional) |
+| `proxy_jump` | Another configured host to connect through (optional) |
 
-Each host has its own thread and keeps one SSH connection open, so a slow or dead host only affects its own row. After a failure the connection is retried with a growing delay. A host that has not answered for three refresh intervals (at least 10 seconds) is marked with the time since its last update.
+The file lives in `$XDG_CONFIG_HOME/nvtop2i/` when that variable is set. Set `NVTOP2I_CONFIG` to use a file somewhere else.
+
+## Command line
+
+```
+nvtop2i                          # local GPUs plus the hosts in the config file
+nvtop2i --setup                  # run the setup again to add or change hosts
+nvtop2i -r 5                     # refresh every 5 seconds, overriding the config
+nvtop2i --ssh-config ./gpu_hosts # read hosts from an SSH config file instead
+nvtop2i --version
+```
+
+With `--ssh-config`, every `Host` entry of that file is polled, so a file that lists only the machines with GPUs works best. `ProxyJump` and `ProxyCommand` are supported there.
+
+Each host has its own thread and keeps one SSH connection open, so a slow or dead host only affects its own rows. After a failure the connection is retried with a growing delay. A host that has not answered for three refresh intervals (at least 10 seconds) is marked with the time since its last update.
 
 ## Keys
+
+Every action has a letter, because desktops often keep the function keys for themselves. The function keys work too when your terminal receives them.
 
 | Key | Action |
 |---|---|
 | `←` `→` | select a host |
-| `↑` `↓` | select a process |
-| `h` / `F2` | fold or unfold the selected host |
-| `s` / `F3` | cycle the process sort (process table only): memory, GPU %, PID, user, host |
-| `f` or `/` / `F4` | filter processes (process table only) by host, user or command (Enter applies, Esc clears) |
-| `i` / `F6` | next refresh interval: 1, 2, 5, 10 or 30 seconds |
-| `c` / `F8` | compact view, one line per GPU |
-| `v` or `Tab` / `F9` | switch between the GPU charts (default) and the process table |
+| `↑` `↓` | select a process (process view) |
+| `v`, `Tab` or `F9` | switch between the charts (default) and the process table |
+| `h` or `F2` | fold or unfold the selected host |
+| `c` or `F8` | compact view, one line per GPU |
+| `i` or `F6` | next refresh interval: 1, 2, 5, 10 or 30 seconds |
+| `s` or `F3` | cycle the process sort: memory, GPU %, PID, user, host (process view) |
+| `f`, `/` or `F4` | filter processes by host, user or command; Enter applies, Esc clears (process view) |
 | `r` | refresh now |
-| `F10`, `q` | quit |
+| `q`, `Esc` or `F10` | quit |
 
 The view switches to compact on its own when the terminal is narrower than 100 columns or too short for the full layout. `F5 Kill` is shown greyed out; killing processes is not implemented.
 
@@ -104,7 +129,7 @@ The layout code builds plain lines of text, so most of the interface is tested w
 
 ## Credits and license
 
-nvtop2i started from [gnvitop](https://github.com/Linwei94/gnvitop) by Linwei94 (MIT). The SSH config parsing, the MetaX and TPU probes and the Gadi node discovery still come from that code. The terminal interface, the monitor and the tests are new. The first commit imports gnvitop 0.5.0 as it was; its earlier history is in that repository.
+nvtop2i started from [gnvitop](https://github.com/Linwei94/gnvitop) by Linwei94 (MIT). The SSH config parsing, the MetaX and TPU probes and the Gadi node discovery still come from that code. The terminal interface, the monitor, the setup and the tests are new. The first commit imports gnvitop 0.5.0 as it was; its earlier history is in that repository.
 
 The layout follows nvtop's look. No code was taken from nvtop, which is GPL-3.0.
 
