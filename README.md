@@ -2,7 +2,7 @@
 
 A terminal GPU monitor in the style of [nvtop](https://github.com/Syllo/nvtop) that shows your own machine and any number of hosts reachable over SSH on one screen.
 
-Each GPU gets the familiar nvtop header (clocks, temperature, fan, power, PCIe link and throughput, utilization and memory bars) plus a short history graph. A process table for all hosts sits below.
+Each GPU gets the familiar nvtop header (clocks, temperature, fan, power, PCIe link and throughput, utilization and memory bars) plus a short history graph. Below each GPU is a chart of its utilization and memory over the last minute or so. `F9` swaps the charts for a process table covering all hosts.
 
 ```
  nvtop2i  3 GPUs on 2 hosts                                    refresh 2s   updated 12:02:24
@@ -59,10 +59,11 @@ Each host has its own thread and keeps one SSH connection open, so a slow or dea
 | `←` `→` | select a host |
 | `↑` `↓` | select a process |
 | `F2` | fold or unfold the selected host |
-| `F3` | cycle the process sort: memory, GPU %, PID, user, host |
-| `F4` | filter processes by host, user or command (Enter applies, Esc clears) |
+| `F3` | cycle the process sort (process table only): memory, GPU %, PID, user, host |
+| `F4` | filter processes (process table only) by host, user or command (Enter applies, Esc clears) |
 | `F6` | next refresh interval: 1, 2, 5, 10 or 30 seconds |
 | `F8` | compact view, one line per GPU |
+| `F9` | switch between the GPU charts (default) and the process table |
 | `r` | refresh now |
 | `F10`, `q` | quit |
 

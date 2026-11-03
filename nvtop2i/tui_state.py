@@ -6,7 +6,8 @@ Nothing here touches curses, so it can be tested without a terminal.
 import threading
 from collections import deque
 
-HISTORY_LEN = 40
+HISTORY_LEN = 400   # enough for 2 samples per column of a wide chart
+VIEWS = ("graph", "procs")
 SPARK_CHARS = "▁▂▃▄▅▆▇█"  # ▁ .. █
 
 SORT_KEYS = ("mem", "gpu", "pid", "user", "host")
@@ -78,6 +79,7 @@ class UIState:
         self.refresh_interval = refresh_interval
         self.collapsed = set()   # host aliases folded with F2
         self.compact = False     # F8
+        self.view = "graph"      # F9: GPU charts or the process table
         self.sort_key = "mem"    # F3 cycles SORT_KEYS
         self.filter_text = ""    # F4
         self.host_index = 0      # left/right
@@ -98,6 +100,9 @@ class UIState:
     def toggle_collapsed_at(self, index):
         if 0 <= index < len(self.host_aliases):
             self.toggle_collapsed(self.host_aliases[index])
+
+    def toggle_view(self):
+        self.view = "procs" if self.view == "graph" else "graph"
 
     def cycle_sort(self):
         i = SORT_KEYS.index(self.sort_key)

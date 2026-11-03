@@ -39,8 +39,14 @@ def results():
     ]
 
 
+def _procs_state(n=2):
+    st = UIState(n)
+    st.view = "procs"
+    return st
+
+
 def render(res, w, h, compact=False, state=None, history=None):
-    st = state or UIState(2)
+    st = state or _procs_state(2)
     st.compact = compact
     hist = history or History()
     for _ in range(5):
@@ -125,7 +131,7 @@ def test_missing_values_show_dashes():
 
 
 def test_collapsed_host_hides_gpus_and_shows_arrow():
-    st = UIState(2)
+    st = _procs_state(2)
     st.collapsed.add("localhost")
     _, text = render(results(), 160, 60, state=st)
     joined = "\n".join(text)
@@ -134,7 +140,7 @@ def test_collapsed_host_hides_gpus_and_shows_arrow():
 
 
 def test_filter_and_sort_reach_the_table_and_footer():
-    st = UIState(2)
+    st = _procs_state(2)
     st.filter_text = "ollama"
     _, text = render(results(), 160, 60, state=st)
     joined = "\n".join(text)
@@ -170,7 +176,7 @@ def test_bar_has_label_inside_and_right_aligned():
 def test_selected_row_scrolls_into_view():
     procs = [proc(i, "u", f"cmd{i}", 100 + i, i) for i in range(1, 40)]
     res = [{"alias": "h", "status": "ok", "gpus": [gpu(0, "NVIDIA X", 1, 1, 2, 3, procs)]}]
-    st = UIState(2)
+    st = _procs_state(2)
     st.sort_key = "pid"
     st.proc_index = 35
     _, text = render(res, 100, 20, state=st)
@@ -180,7 +186,7 @@ def test_selected_row_scrolls_into_view():
 
 def test_key_handling():
     import curses
-    st = UIState(2)
+    st = _procs_state(2)
     st.host_aliases = ["a", "b", "c"]
     scr = tui.Screen([], 3, [{"host": "a", "gpu": 0, "pid": p} for p in (1, 2, 3, 4)], False)
     assert tui._handle_key(curses.KEY_F8, st, scr) is None and st.compact
@@ -263,7 +269,7 @@ def test_narrow_table_drops_user_and_type_to_keep_the_command_readable():
 def test_f6_goes_to_the_next_larger_interval_even_from_an_odd_value():
     import curses
     scr = tui.Screen([], 1, [], False)
-    st = UIState(3)
+    st = _procs_state(3)
     tui._handle_key(curses.KEY_F6, st, scr)
     assert st.refresh_interval == 5
     st.refresh_interval = 30
@@ -272,7 +278,7 @@ def test_f6_goes_to_the_next_larger_interval_even_from_an_odd_value():
 
 
 def test_compact_view_keeps_a_collapsed_host_visible_and_marks_the_selected_one():
-    st = UIState(2)
+    st = _procs_state(2)
     st.collapsed.add("ryzen9")
     screen, text = render(results(), 120, 30, compact=True, state=st)
     joined = "\n".join(text)
@@ -282,3 +288,34 @@ def test_compact_view_keeps_a_collapsed_host_visible_and_marks_the_selected_one(
     # the selected host (first one) is drawn with its own role in the rows
     sel_roles = [(t, r) for line in screen.lines for t, r in line if r == "host_sel"]
     assert sel_roles and sel_roles[0][0].strip() == "localhost"
+
+
+def test_graph_view_is_default_and_draws_boxes_instead_of_the_table():
+    st = UIState(2)
+    assert st.view == "graph"
+    _, text = render(results(), 120, 40, state=st)
+    assert any("GPU0 %" in l and "mem%" in l and l.lstrip().startswith("┌") for l in text)
+    assert not any("COMMAND" in l for l in text)
+    assert any("F9 View:graph" in l for l in text)
+    assert any(any("\u2800" <= c <= "\u28ff" for c in l) for l in text)
+
+
+def test_f9_toggles_between_graph_and_process_table():
+    import curses
+    st = UIState(2)
+    scr = tui.Screen([], 0, [], False)
+    tui._handle_key(curses.KEY_F9, st, scr)
+    assert st.view == "procs"
+    _, text = render(results(), 120, 40, state=st)
+    assert any("COMMAND" in l for l in text)
+    tui._handle_key(curses.KEY_F9, st, scr)
+    assert st.view == "graph"
+    tui._handle_key(curses.KEY_F3, st, scr)
+    assert st.sort_key == "mem"   # F3 does nothing in the graph view
+
+
+def test_step_chart_marks_the_newest_value_at_the_right_edge():
+    from nvtop2i.chart import step_masks
+    m = step_masks([0, 100], cols=3, rows=2)
+    assert m[0][2] & 0x10 and m[1][2] & 0x08   # right column: the step goes from bottom to top
+    assert not any(m[r][0] for r in range(2))

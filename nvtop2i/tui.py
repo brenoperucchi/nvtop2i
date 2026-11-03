@@ -10,9 +10,12 @@ import os
 import time
 from collections import namedtuple
 
+from .chart import combine, step_masks
 from .tui_state import History, UIState, process_rows, sparkline
 
 FULL_MIN_WIDTH = 100     # narrower terminals use the compact view
+CHART_MIN_LINES = 5      # border + 3 plot rows + border
+CHART_MAX_LINES = 12
 TABLE_MIN_LINES = 5      # border + header + one row + border + gap
 BAR = "|"
 
@@ -138,8 +141,9 @@ def _has_nvtop_fields(gpu):
     return "clock_gr_mhz" in gpu
 
 
-def _gpu_full(alias, gpu, history, width):
-    """Four-line nvtop-style block for one GPU."""
+def _gpu_full(alias, gpu, history, width, chart_h=0, interval=2):
+    """nvtop-style block for one GPU: three header lines, then the sparkline
+    row, or a chart box of `chart_h` lines when chart_h > 0."""
     idx = gpu["index"]
     util = gpu.get("gpu_utilization_pct")
     mem_pct = gpu.get("memory_usage_pct")
@@ -181,6 +185,9 @@ def _gpu_full(alias, gpu, history, width):
              + [("  ", "white")]
              + _bar_segs("MEM", mem_pct, inner, mem_label, _usage_role(mem_pct)))
 
+    head = [_fit(line1, width - 1), _fit(line2, width - 1), _fit(line3, width - 1)]
+    if chart_h > 0:
+        return head + _chart(history, alias, idx, width, chart_h, interval)
     fixed = len(" hist GPU   MEM   TEMP ")
     sw = max(8, min(40, (width - 1 - fixed) // 3))
     gs = history.series(alias, idx, "gpu")
@@ -192,8 +199,43 @@ def _gpu_full(alias, gpu, history, width):
         ("  TEMP ", "white"),
         (sparkline(ts, sw, lo=20, hi=100), _temp_role(ts[-1] if ts else None)),
     ]
-    return [_fit(line1, width - 1), _fit(line2, width - 1),
-            _fit(line3, width - 1), _fit(line4, width - 1)]
+    return head + [_fit(line4, width - 1)]
+
+
+def _chart(history, alias, idx, width, height, interval):
+    """Box with GPU% and MEM% step lines (braille), 0..100 on the left axis."""
+    label_w = 4
+    inner = width - 1 - label_w - 2
+    rows = height - 2
+    gs = history.series(alias, idx, "gpu")
+    ms = history.series(alias, idx, "mem")
+    cells = combine([step_masks(gs, inner, rows), step_masks(ms, inner, rows)])
+    roles = ("chart_gpu", "chart_mem")
+    ticks = {0: "100", rows - 1: "0"}
+    if rows >= 3:
+        ticks[rows // 2] = "50"
+    t1, t2 = f" GPU{idx} % ", f" GPU{idx} mem% "
+    fill = max(0, inner - len(t1) - len(t2) - 2)
+    lines = [[(" " * label_w + "┌─", "dim"), (t1, "chart_gpu"), ("─", "dim"),
+              (t2, "chart_mem"), ("─" * fill + "┐", "dim")]]
+    for r in range(rows):
+        segs = [(f"{ticks.get(r, ''):>{label_w - 1}} ", "white"), ("│", "dim")]
+        run, run_role = "", None
+        for ch, owner in cells[r]:
+            role = roles[owner] if ch != " " else "white"
+            if role != run_role and run:
+                segs.append((run, run_role))
+                run = ""
+            run_role = role
+            run += ch
+        segs.append((run, run_role))
+        segs.append(("│", "dim"))
+        lines.append(segs)
+    span = f"{int((min(len(gs), inner * 2) or 1) * interval)}s"
+    pad = max(0, inner - len(span) - 2)
+    lines.append([(" " * label_w + "└", "dim"), (span, "white"),
+                  ("─" * pad, "dim"), ("0s", "white"), ("┘", "dim")])
+    return [_fit(ln, width - 1) for ln in lines]
 
 
 def _gpu_compact(alias, gpu, history, width, host_w, selected=False):
@@ -336,18 +378,23 @@ def _table(rows, state, width, max_lines):
 
 def _footer(state, width):
     sort = f"F3 Sort:{state.sort_key}"
+    if state.view == "graph":
+        segs = [(" F2 Hosts  ", "white"), ("F3 Sort  F4 Filter  F5 Kill", "dim"),
+                (f"  F6 Interval:{state.refresh_interval}s  F8 Compact  F9 View:graph  F10 Quit", "white"),
+                ("    ←/→ host", "dim")]
+        return _fit(segs, width - 1)
     if state.filtering:
         segs = [(" Filter: ", "bold"), (state.filter_text + "_", "yellow"),
                 ("   Enter apply  Esc clear", "dim")]
         return _fit(segs, width - 1)
     flt = f"F4 Filter:{state.filter_text}" if state.filter_text else "F4 Filter"
     segs = [(f" F2 Hosts  {sort}  {flt}  ", "white"), ("F5 Kill", "dim"),
-            (f"  F6 Interval:{state.refresh_interval}s  F8 Compact  F10 Quit", "white"),
+            (f"  F6 Interval:{state.refresh_interval}s  F8 Compact  F9 View:procs  F10 Quit", "white"),
             ("    ←/→ host  ↑/↓ process", "dim")]
     return _fit(segs, width - 1)
 
 
-def _gpu_section(results, history, state, width, compact):
+def _gpu_section(results, history, state, width, compact, chart_h=0):
     lines = []
     host_w = min(14, max([len(h["alias"]) for h in results] + [4]))
     for hi, host in enumerate(results):
@@ -365,7 +412,8 @@ def _gpu_section(results, history, state, width, compact):
                 lines.append(_gpu_compact(host["alias"], gpu, history, width, host_w,
                                           compact and hi == state.host_index))
             else:
-                lines.extend(_gpu_full(host["alias"], gpu, history, width))
+                lines.extend(_gpu_full(host["alias"], gpu, history, width, chart_h,
+                                       state.refresh_interval))
                 lines.append([])
         if not compact and not (host["gpus"] and _has_nvtop_fields(host["gpus"][-1])):
             lines.append([])
@@ -394,16 +442,30 @@ def build_screen(results, history, state, width, height, meta):
                       0, [], compact)
 
     compact = state.compact or width < FULL_MIN_WIDTH
-    body = _gpu_section(results, history, state, width, compact)
-    if not compact and len(top) + len(body) > height - 1 - TABLE_MIN_LINES:
-        compact = True   # the full view does not fit: fall back to one line per GPU
+    graph = state.view == "graph"
+    if graph:
+        body = _gpu_section(results, history, state, width, compact, CHART_MIN_LINES)
+        extra = height - 1 - len(top) - len(body)
+        if not compact and extra < 0:
+            compact = True
+            body = _gpu_section(results, history, state, width, compact)
+        elif not compact:
+            n = sum(1 for h in results if h["status"] == "ok" and h["alias"] not in state.collapsed
+                    for g in h["gpus"] if _has_nvtop_fields(g))
+            grow = min(CHART_MAX_LINES - CHART_MIN_LINES, extra // n) if n else 0
+            body = _gpu_section(results, history, state, width, compact,
+                                CHART_MIN_LINES + grow)
+    else:
         body = _gpu_section(results, history, state, width, compact)
+        if not compact and len(top) + len(body) > height - 1 - TABLE_MIN_LINES:
+            compact = True   # the full view does not fit: fall back to one line per GPU
+            body = _gpu_section(results, history, state, width, compact)
 
-    rows = process_rows(results, state)
+    rows = [] if graph else process_rows(results, state)
     state.sync_procs(rows)
     lines = top + body
     room = height - 1 - len(lines)
-    if room >= TABLE_MIN_LINES:
+    if not graph and room >= TABLE_MIN_LINES:
         lines += _table(rows, state, width, room)
     while len(lines) < height - 1:
         lines.append([])
@@ -437,6 +499,7 @@ def _init_attrs():
         "dim": dim, "bold": bold, "value": bold, "hdr": bold | curses.A_UNDERLINE,
         "title": cp(4) | bold, "sel": curses.A_REVERSE,
         "host_sel": bold | curses.A_UNDERLINE,
+        "chart_gpu": cp(4), "chart_mem": cp(2),
         "badge_ok": cp(1) | bold, "badge_local": cp(6) | bold,
         "badge_nogpu": cp(2) | bold, "badge_off": cp(3) | bold,
     }
@@ -480,9 +543,11 @@ def _handle_key(key, state, screen):
         return "refresh"
     if key == curses.KEY_F2:
         state.toggle_collapsed_at(state.host_index)
-    elif key == curses.KEY_F3:
+    elif key == curses.KEY_F9:
+        state.toggle_view()
+    elif key == curses.KEY_F3 and state.view == "procs":
         state.cycle_sort()
-    elif key == curses.KEY_F4:
+    elif key == curses.KEY_F4 and state.view == "procs":
         state.filtering = True
     elif key == curses.KEY_F6:
         bigger = [i for i in INTERVALS if i > state.refresh_interval]
