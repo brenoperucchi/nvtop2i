@@ -377,19 +377,19 @@ def _table(rows, state, width, max_lines):
 # ── screen assembly ──────────────────────────────────────────────────────────
 
 def _footer(state, width):
-    sort = f"F3 Sort:{state.sort_key}"
+    sort = f"s Sort:{state.sort_key}"
     if state.view == "graph":
-        segs = [(" F2 Hosts  ", "white"), ("F3 Sort  F4 Filter  F5 Kill", "dim"),
-                (f"  F6 Interval:{state.refresh_interval}s  F8 Compact  F9 View:graph  F10 Quit", "white"),
-                ("    ←/→ host", "dim")]
+        segs = [(" h Hosts  ", "white"), ("s Sort  f Filter  F5 Kill", "dim"),
+                (f"  i Interval:{state.refresh_interval}s  c Compact  v View:graph  q Quit", "white"),
+                ("    ←/→ host   (F2 F6 F8 F9 F10 also work)", "dim")]
         return _fit(segs, width - 1)
     if state.filtering:
         segs = [(" Filter: ", "bold"), (state.filter_text + "_", "yellow"),
                 ("   Enter apply  Esc clear", "dim")]
         return _fit(segs, width - 1)
-    flt = f"F4 Filter:{state.filter_text}" if state.filter_text else "F4 Filter"
-    segs = [(f" F2 Hosts  {sort}  {flt}  ", "white"), ("F5 Kill", "dim"),
-            (f"  F6 Interval:{state.refresh_interval}s  F8 Compact  F9 View:procs  F10 Quit", "white"),
+    flt = f"f Filter:{state.filter_text}" if state.filter_text else "f Filter"
+    segs = [(f" h Hosts  {sort}  {flt}  ", "white"), ("F5 Kill", "dim"),
+            (f"  i Interval:{state.refresh_interval}s  c Compact  v View:procs  q Quit", "white"),
             ("    ←/→ host  ↑/↓ process", "dim")]
     return _fit(segs, width - 1)
 
@@ -523,6 +523,11 @@ def _paint(stdscr, screen, attrs):
 
 INTERVALS = (1, 2, 5, 10, 30)
 
+# Letters for the function keys: desktops often grab F-keys before the terminal.
+_ALIASES = {ord("h"): curses.KEY_F2, ord("s"): curses.KEY_F3, ord("f"): curses.KEY_F4,
+            ord("/"): curses.KEY_F4, ord("i"): curses.KEY_F6, ord("c"): curses.KEY_F8,
+            ord("v"): curses.KEY_F9, ord("\t"): curses.KEY_F9}
+
 
 def _handle_key(key, state, screen):
     """Apply one key to the UI state. Returns 'quit', 'refresh' or None."""
@@ -541,6 +546,7 @@ def _handle_key(key, state, screen):
         return "quit"
     if key in (ord("r"), ord("R")):
         return "refresh"
+    key = _ALIASES.get(key, key)
     if key == curses.KEY_F2:
         state.toggle_collapsed_at(state.host_index)
     elif key == curses.KEY_F9:

@@ -84,7 +84,7 @@ def test_full_view_matches_mockup_a():
     assert "┌" in joined and "COMMAND" in joined
     assert "ollama" in joined and "31.0GiB" in joined and "Hyprland" in joined
     # footer
-    assert "F2 Hosts" in text[-1] and "F10 Quit" in text[-1]
+    assert "h Hosts" in text[-1] and "q Quit" in text[-1]
 
 
 def test_compact_view_matches_mockup_b():
@@ -145,7 +145,7 @@ def test_filter_and_sort_reach_the_table_and_footer():
     _, text = render(results(), 160, 60, state=st)
     joined = "\n".join(text)
     assert "ollama" in joined and "Hyprland" not in joined
-    assert "F4 Filter:ollama" in text[-1]
+    assert "f Filter:ollama" in text[-1]
     st.filtering = True
     _, text = render(results(), 160, 60, state=st)
     assert text[-1].startswith(" Filter: ollama_")
@@ -296,7 +296,7 @@ def test_graph_view_is_default_and_draws_boxes_instead_of_the_table():
     _, text = render(results(), 120, 40, state=st)
     assert any("GPU0 %" in l and "mem%" in l and l.lstrip().startswith("┌") for l in text)
     assert not any("COMMAND" in l for l in text)
-    assert any("F9 View:graph" in l for l in text)
+    assert any("v View:graph" in l for l in text)
     assert any(any("\u2800" <= c <= "\u28ff" for c in l) for l in text)
 
 
@@ -319,3 +319,20 @@ def test_step_chart_marks_the_newest_value_at_the_right_edge():
     m = step_masks([0, 100], cols=3, rows=2)
     assert m[0][2] & 0x10 and m[1][2] & 0x08   # right column: the step goes from bottom to top
     assert not any(m[r][0] for r in range(2))
+
+
+def test_letter_keys_work_like_the_function_keys():
+    st = UIState(2)
+    st.host_aliases = ["a", "b"]
+    scr = tui.Screen([], 2, [], False)
+    tui._handle_key(ord("v"), st, scr)
+    assert st.view == "procs"
+    tui._handle_key(ord("s"), st, scr)
+    assert st.sort_key != "mem"
+    tui._handle_key(ord("c"), st, scr)
+    assert st.compact
+    assert tui._handle_key(ord("i"), st, scr) == "interval" and st.refresh_interval == 5
+    tui._handle_key(ord("h"), st, scr)
+    assert st.collapsed == {"a"}
+    tui._handle_key(ord("f"), st, scr)
+    assert st.filtering
