@@ -220,3 +220,46 @@ def test_host_without_recent_update_is_marked_stale():
     joined = "\n".join(text)
     assert "localhost [Local]  no update for 45s" in joined
     assert "ryzen9 [Online]  no update" not in joined
+
+
+def test_init_attrs_without_color_support(monkeypatch):
+    import curses
+    monkeypatch.setattr(curses, "has_colors", lambda: False)
+    attrs = tui._init_attrs()          # must not touch start_color/init_pair
+    assert attrs["green"] == 0 and attrs["badge_off"] == curses.A_BOLD
+    assert attrs["dim"] == curses.A_DIM and attrs["sel"] == curses.A_REVERSE
+
+
+def test_init_attrs_when_default_colors_are_unsupported(monkeypatch):
+    import curses
+    calls = []
+    monkeypatch.setattr(curses, "has_colors", lambda: True)
+    monkeypatch.setattr(curses, "start_color", lambda: None)
+    monkeypatch.setattr(curses, "COLORS", 8, raising=False)
+
+    def no_default():
+        raise curses.error("ERR")
+    monkeypatch.setattr(curses, "use_default_colors", no_default)
+    monkeypatch.setattr(curses, "init_pair", lambda n, fg, bg: calls.append((n, bg)))
+    monkeypatch.setattr(curses, "color_pair", lambda n: n << 8)
+    attrs = tui._init_attrs()
+    assert all(bg == curses.COLOR_BLACK for _, bg in calls) and len(calls) == 8
+    assert attrs["green"] == 1 << 8
+
+
+def test_connecting_host_gets_a_badge_and_never_looks_stale():
+    res = results() + [{"alias": "slow", "status": "connecting", "error": None,
+                        "gpus": [], "age_s": 120.0}]
+    _, text = render(res, 160, 60)
+    joined = "\n".join(text)
+    assert "slow [Connecting]" in joined and "no update" not in joined
+
+
+def test_narrow_table_drops_user_and_type_to_keep_the_command_readable():
+    _, wide = render(results(), 160, 60)
+    assert any("USER" in l and "TYPE" in l for l in wide)
+    _, narrow = render(results(), 60, 24)
+    header = next(l for l in narrow if "COMMAND" in l)
+    assert "USER" not in header and "TYPE" not in header
+    row = next(l for l in narrow if "ollama" in l)
+    assert "ollama" in row and "31.0GiB" in row

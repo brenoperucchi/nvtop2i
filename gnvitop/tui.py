@@ -127,6 +127,8 @@ def _badge(host):
         return "[Online]", "badge_ok"
     if status == "no_gpu":
         return "[No GPU]", "badge_nogpu"
+    if status == "connecting":
+        return "[Connecting]", "badge_nogpu"
     return "[Offline]", "badge_off"
 
 
@@ -251,47 +253,79 @@ def _host_header(host, selected, collapsed, width, stale_after=None):
     elif host["status"] == "no_gpu" and host.get("error"):
         segs.append(("  " + str(host["error"]), "dim"))
     age = host.get("age_s")
-    if stale_after and age is not None and age > stale_after:
+    if stale_after and age is not None and age > stale_after and host["status"] == "ok":
         segs.append((f"  no update for {age:.0f}s", "yellow"))
     return _fit(segs, width - 1)
 
 
 # ── process table ────────────────────────────────────────────────────────────
 
+# (title, key, right aligned, max width, droppable on narrow terminals)
+_COLUMNS = (
+    ("HOST", "host", False, 14, False),
+    ("GPU", "gpu", False, 3, False),
+    ("PID", "pid", False, 8, False),
+    ("USER", "user", False, 14, True),
+    ("TYPE", "type", False, 4, True),
+    ("GPU MEM", "mem", True, 8, False),
+    ("GPU%", "sm", True, 4, False),
+)
+MIN_COMMAND_WIDTH = 12
+
+
+def _cell(row, key):
+    if key == "mem":
+        return _fmt_mem_col(row["mem_mb"])
+    if key == "sm":
+        return "-" if row["sm_pct"] is None else f"{row['sm_pct']:.0f}%"
+    return str(row[key])
+
+
 def _table(rows, state, width, max_lines):
-    """Boxed process table; scrolls so the selected row stays visible."""
-    headers = ("HOST", "GPU", "PID", "USER", "TYPE", "GPU MEM", "GPU%")
-    cells = [(r["host"], str(r["gpu"]), str(r["pid"]), r["user"], r["type"],
-              _fmt_mem_col(r["mem_mb"]),
-              "-" if r["sm_pct"] is None else f"{r['sm_pct']:.0f}%") for r in rows]
-    widths = [max([len(h)] + [len(c[i]) for c in cells]) for i, h in enumerate(headers)]
-    widths = [min(w_, cap) for w_, cap in zip(widths, (14, 3, 8, 14, 4, 8, 4))]
+    """Boxed process table; scrolls so the selected row stays visible.
+
+    USER and TYPE are dropped (in that order of need) when the terminal is too
+    narrow to leave room for the command.
+    """
     inner_w = width - 3
-    used = sum(widths) + 2 * len(widths) + 1
-    cmd_w = max(7, inner_w - used)
+    cols = list(_COLUMNS)
+
+    def layout(cs):
+        ws = [min(max([len(t)] + [len(_cell(r, k)) for r in rows]), cap)
+              for t, k, _, cap, _ in cs]
+        return ws, inner_w - (sum(ws) + len(ws) + 2)   # width left for COMMAND
+
+    widths, cmd_w = layout(cols)
+    for drop in ("TYPE", "USER"):
+        if cmd_w >= MIN_COMMAND_WIDTH:
+            break
+        cols = [c for c in cols if c[0] != drop]
+        widths, cmd_w = layout(cols)
+    cmd_w = max(cmd_w, 1)
 
     def fmt_row(vals, cmd):
         out = ""
-        for i, v in enumerate(vals):
-            out += (f"{v:>{widths[i]}}" if i in (5, 6) else f"{v:<{widths[i]}}") + " "
-        return " " + out + " " + cmd
+        for (title, key, right, _, _), w_, v in zip(cols, widths, vals):
+            out += (f"{v[:w_]:>{w_}}" if right else f"{v[:w_]:<{w_}}") + " "
+        return " " + out + cmd[:cmd_w]
 
     def boxed(text, role):
         body = text[:inner_w].ljust(inner_w)
-        return [("│" + body + "│", role)]
+        return [("\u2502" + body + "\u2502", role)]
 
-    lines = [[("┌" + "─" * inner_w + "┐", "dim")],
-             boxed(fmt_row(headers, "COMMAND"), "hdr")]
+    lines = [[("\u250c" + "\u2500" * inner_w + "\u2510", "dim")],
+             boxed(fmt_row([c[0] for c in cols], "COMMAND"), "hdr")]
     visible = max(0, max_lines - 3)
     start = 0
     if len(rows) > visible:
         start = min(max(0, state.proc_index - visible + 1), len(rows) - visible)
     for i in range(start, min(len(rows), start + visible)):
         role = "sel" if i == state.proc_index else "white"
-        lines.append(boxed(fmt_row(cells[i], rows[i]["command"][:cmd_w]), role))
+        lines.append(boxed(fmt_row([_cell(rows[i], c[1]) for c in cols],
+                                   rows[i]["command"]), role))
     if not rows:
         lines.append(boxed("  no GPU processes", "dim"))
-    lines.append([("└" + "─" * inner_w + "┘", "dim")])
+    lines.append([("\u2514" + "\u2500" * inner_w + "\u2518", "dim")])
     return [_fit(ln, width - 1) for ln in lines]
 
 
@@ -379,19 +413,27 @@ def build_screen(results, history, state, width, height, meta):
 # ── curses layer ─────────────────────────────────────────────────────────────
 
 def _init_attrs():
-    curses.start_color()
-    curses.use_default_colors()
-    pairs = [(1, curses.COLOR_GREEN), (2, curses.COLOR_YELLOW), (3, curses.COLOR_RED),
-             (4, curses.COLOR_CYAN), (5, curses.COLOR_WHITE), (6, curses.COLOR_BLUE),
-             (7, curses.COLOR_MAGENTA), (8, curses.COLOR_BLACK + 8 if curses.COLORS > 8
-                                         else curses.COLOR_BLACK)]
-    for n, color in pairs:
-        curses.init_pair(n, color, -1)
-    cp = curses.color_pair
+    """Map roles to curses attributes; falls back to bold/reverse without colors."""
     bold = curses.A_BOLD
+    cp = lambda n: 0  # noqa: E731
+    if curses.has_colors():
+        curses.start_color()
+        bg = -1
+        try:
+            curses.use_default_colors()
+        except curses.error:
+            bg = curses.COLOR_BLACK   # terminal cannot keep its own background
+        pairs = [(1, curses.COLOR_GREEN), (2, curses.COLOR_YELLOW), (3, curses.COLOR_RED),
+                 (4, curses.COLOR_CYAN), (5, curses.COLOR_WHITE), (6, curses.COLOR_BLUE),
+                 (7, curses.COLOR_MAGENTA),
+                 (8, curses.COLOR_BLACK + 8 if curses.COLORS > 8 else curses.COLOR_WHITE)]
+        for n, color in pairs:
+            curses.init_pair(n, color, bg)
+        cp = curses.color_pair
+    dim = cp(8) if curses.has_colors() else curses.A_DIM
     return {
         "green": cp(1), "yellow": cp(2), "red": cp(3), "cyan": cp(4), "white": 0,
-        "dim": cp(8), "bold": bold, "value": bold, "hdr": bold | curses.A_UNDERLINE,
+        "dim": dim, "bold": bold, "value": bold, "hdr": bold | curses.A_UNDERLINE,
         "title": cp(4) | bold, "sel": curses.A_REVERSE,
         "host_sel": bold | curses.A_UNDERLINE,
         "badge_ok": cp(1) | bold, "badge_local": cp(6) | bold,
@@ -463,6 +505,10 @@ def _tui_main(stdscr, monitor, history, state):
     attrs = _init_attrs()
     stdscr.keypad(True)
     stdscr.timeout(250)
+    # Every frame is repainted from scratch, so line insert/delete and scroll
+    # regions only add escape sequences some terminals handle badly.
+    stdscr.idlok(False)
+    stdscr.scrollok(False)
     screen = Screen([], 0, [], False)
 
     while True:

@@ -90,6 +90,13 @@ class Monitor:
         threading.Thread(target=self._setup, daemon=True, name="gnvitop-setup").start()
 
     def _spawn(self, host_info, hosts_by_alias):
+        # Show the host right away; a slow connection can take a long time.
+        placeholder = srv._new_result(dict(host_info, hostname=host_info.get("hostname"),
+                                           user=host_info.get("user"),
+                                           port=host_info.get("port", 22)))
+        placeholder["status"] = "connecting"
+        placeholder["is_local"] = bool(host_info.get("is_local"))
+        self.publish(host_info["alias"], placeholder)
         worker = _HostWorker(self, host_info, hosts_by_alias)
         self._workers.append(worker)
         worker.start()

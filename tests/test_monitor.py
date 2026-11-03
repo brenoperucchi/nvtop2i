@@ -124,8 +124,9 @@ def test_slow_host_does_not_block_the_others(fake_server):
     m.start()
     try:
         assert wait_for(lambda: fake_server["polls"].get("beta", 0) >= 5)
-        aliases = {r["alias"] for r in m.snapshot()}
-        assert "beta" in aliases and "localhost" in aliases and "alpha" not in aliases
+        status = {r["alias"]: r["status"] for r in m.snapshot()}
+        assert status["beta"] == "ok" and status["localhost"] == "ok"
+        assert status["alpha"] == "connecting"   # visible, still waiting
     finally:
         release.set()
         m.stop()
