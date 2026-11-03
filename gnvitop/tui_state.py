@@ -12,7 +12,9 @@ SORT_KEYS = ("mem", "gpu", "pid", "user", "host")
 
 
 def sparkline(values, width, lo=0.0, hi=100.0):
-    """Render the last `width` values as block characters, left padded to `width`.
+    """Render the last `width` values as block characters, right padded to `width`.
+
+    A short history grows from the left and scrolls once it fills the width.
 
     Missing samples (None) are drawn as a space. Values outside lo..hi are clamped.
     """
@@ -28,7 +30,7 @@ def sparkline(values, width, lo=0.0, hi=100.0):
             continue
         frac = min(1.0, max(0.0, (v - lo) / span))
         out.append(SPARK_CHARS[int(round(frac * top))])
-    return "".join(out).rjust(width)
+    return "".join(out).ljust(width)
 
 
 class History:
@@ -70,12 +72,18 @@ class UIState:
         self.filter_text = ""    # F4
         self.host_index = 0      # left/right
         self.proc_index = 0      # up/down
+        self.filtering = False   # typing into the F4 filter
+        self.host_aliases = []   # aliases in display order, set by the renderer
 
     def toggle_collapsed(self, alias):
         if alias in self.collapsed:
             self.collapsed.remove(alias)
         else:
             self.collapsed.add(alias)
+
+    def toggle_collapsed_at(self, index):
+        if 0 <= index < len(self.host_aliases):
+            self.toggle_collapsed(self.host_aliases[index])
 
     def cycle_sort(self):
         i = SORT_KEYS.index(self.sort_key)

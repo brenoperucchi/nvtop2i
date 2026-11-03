@@ -4,8 +4,8 @@ from gnvitop.tui_state import History, UIState, process_rows, sparkline
 def test_sparkline_scales_and_pads():
     s = sparkline([0, 50, 100], 5)
     assert len(s) == 5
-    assert s[:2] == "  "
-    assert s[2] == "▁" and s[4] == "█"
+    assert s[3:] == "  "
+    assert s[0] == "▁" and s[2] == "█"
 
 
 def test_sparkline_keeps_only_the_tail():
@@ -17,6 +17,7 @@ def test_sparkline_none_clamp_and_zero_width():
     assert sparkline([None, 150, -20], 3) == " █▁"
     assert sparkline([1, 2], 0) == ""
     assert sparkline([], 4) == "    "
+    assert sparkline([None, 150, -20], 3) == " \u2588\u2581"
 
 
 def test_sparkline_custom_range_for_temperature():
