@@ -346,3 +346,10 @@ def test_two_series_on_the_same_level_both_show():
     mem = step_cells([(0, 20.0)], now=10, cols=6, rows=3, window=10)
     owners = {o for ch, o in overlay([gpu, mem])[2]}
     assert owners == {0, 1}
+
+
+def test_offline_host_shows_attempt_number_and_countdown():
+    host = {"alias": "ryzen9", "status": "error", "error": "Connection timed out",
+            "gpus": [], "fails": 3, "retry_in": 8, "age_s": 3}
+    line = "".join(t for t, _ in tui._host_header(host, False, False, 120))
+    assert "Connection timed out  retry #3 in 5s" in line

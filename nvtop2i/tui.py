@@ -19,6 +19,8 @@ CHART_MAX_LINES = 18
 TABLE_MIN_LINES = 5      # border + header + one row + border + gap
 BAR = "|"
 
+from . import __version__
+
 Screen = namedtuple("Screen", "lines hosts rows compact")
 
 
@@ -304,6 +306,9 @@ def _host_header(host, selected, collapsed, width, stale_after=None):
             (" ", "white"), (badge, role)]
     if host["status"] == "error":
         segs.append(("  " + str(host.get("error") or "unknown error"), "red"))
+        if host.get("retry_in") is not None:
+            left = max(0, round(host["retry_in"] - (host.get("age_s") or 0)))
+            segs.append((f"  retry #{host.get('fails', 1)} in {left}s", "yellow"))
     elif host["status"] == "no_gpu" and host.get("error"):
         segs.append(("  " + str(host["error"]), "dim"))
     age = host.get("age_s")
@@ -435,7 +440,7 @@ def build_screen(results, history, state, width, height, meta):
     state.host_aliases = [h["alias"] for h in results]
     state.sync_hosts()
     gpu_count = sum(len(h.get("gpus", [])) for h in results if h["status"] == "ok")
-    left = [(f" nvtop2i  {gpu_count} GPUs on {len(results)} hosts", "title")]
+    left = [(f" nvtop2i {__version__}  {gpu_count} GPUs on {len(results)} hosts", "title")]
     if meta.get("loading") and not meta.get("last_update"):
         right_txt = f"refresh {state.refresh_interval}s   updating..."
     else:
@@ -610,6 +615,8 @@ def _tui_main(stdscr, monitor, history, state):
 def run_tui(ssh_config_path=None, refresh_interval=2):
     """Launch the curses TUI dashboard."""
     import nvtop2i.probe as srv
+    from .log import setup_logging
+    setup_logging()
     if ssh_config_path:
         srv.SSH_CONFIG_PATH = ssh_config_path
 

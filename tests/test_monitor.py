@@ -280,3 +280,27 @@ def test_connecting_placeholders_sort_after_ok_hosts():
             {"alias": "b", "status": "connecting", "gpus": []},
             {"alias": "a", "status": "ok", "gpus": []}]
     assert [r["alias"] for r in srv._sort_results(rows)] == ["a", "b", "c"]
+
+
+def test_outage_is_logged_published_with_retry_info_and_recovery_is_logged(fake_server, caplog):
+    def down_then_up(n):
+        if n in (2, 3, 4, 5):          # a dropped poll plus its immediate retry, twice
+            raise OSError("Connection timed out")
+        return ok_result("alpha")
+    fake_server["behaviour"]["alpha"] = down_then_up
+
+    seen = []
+    m = mon.Monitor(interval=lambda: 0.02, on_result=lambda r: seen.append(r))
+    with caplog.at_level("INFO", logger="nvtop2i"):
+        m.start()
+        try:
+            assert wait_for(lambda: fake_server["polls"].get("alpha", 0) >= 9)
+        finally:
+            m.stop()
+
+    errors = [r for r in seen if r["alias"] == "alpha" and r["status"] == "error"]
+    assert errors and all(r["fails"] >= 1 and r["retry_in"] >= 0 for r in errors)
+    text = caplog.text
+    assert "alpha: connection lost: " in text and "retrying in" in text
+    assert "alpha: reconnected after" in text
+    assert "localhost" not in text                       # the local row never logs outages

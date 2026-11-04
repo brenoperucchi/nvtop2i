@@ -5,10 +5,13 @@ reused for every poll (each poll is a new channel); after a failure the worker
 reconnects with a growing delay.
 """
 
+import logging
 import threading
 import time
 
 from . import probe as srv
+
+log = logging.getLogger("nvtop2i")
 
 MAX_BACKOFF = 30
 NO_GPU_DELAY = 30          # hosts without a GPU rarely change; poll them slowly
@@ -32,6 +35,8 @@ class _HostWorker(threading.Thread):
         self.fails = 0
         self.client = None
         self.jump_client = None
+        self.down_since = None
+        self.outage_attempts = 0
 
     def _close(self):
         for c in (self.client, self.jump_client):
@@ -78,6 +83,23 @@ class _HostWorker(threading.Thread):
             self._close()
             return self._error_result(e)
 
+    def _log_transition(self, result, wait):
+        alias = self.host_info["alias"]
+        if self.host_info.get("is_local"):
+            return
+        if result["status"] == "error":
+            self.outage_attempts += 1
+            if self.down_since is None:
+                self.down_since = time.time()
+                log.warning("%s: connection lost: %s", alias, result["error"])
+            log.warning("%s: attempt %d failed (%s), retrying in %.0fs",
+                        alias, self.fails, result["error"], wait)
+        elif self.down_since is not None:
+            log.info("%s: reconnected after %.0fs and %d failed attempt(s)",
+                     alias, time.time() - self.down_since, self.outage_attempts)
+            self.down_since = None
+            self.outage_attempts = 0
+
     def run(self):
         mon = self.monitor
         while not mon.stopped.is_set():
@@ -85,9 +107,13 @@ class _HostWorker(threading.Thread):
             result = self.poll()
             if mon.stopped.is_set():
                 break
-            mon.publish(self.host_info["alias"], result)
             self.fails = 0 if result["status"] != "error" else self.fails + 1
             wait = poll_delay(mon.interval(), self.fails)
+            if result["status"] == "error":
+                result["fails"] = self.fails
+                result["retry_in"] = wait
+            self._log_transition(result, wait)
+            mon.publish(self.host_info["alias"], result)
             if result["status"] == "no_gpu":
                 wait = max(wait, NO_GPU_DELAY)
             wait = max(0.0, wait - (time.time() - started))
