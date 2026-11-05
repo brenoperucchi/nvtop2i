@@ -59,15 +59,38 @@ def load(path=None):
     return hosts, max(1, refresh)
 
 
+def load_options(path=None):
+    """UI switches from [general]; both default to on, and a missing or bad file is fine."""
+    opts = {"show_cpu": True, "chart_temp": True}
+    cp = _parser()
+    try:
+        with open(path or config_path(), "r", encoding="utf-8") as f:
+            cp.read_file(f)
+    except (OSError, configparser.Error):
+        return opts
+    for key in opts:
+        try:
+            opts[key] = cp.getboolean("general", key, fallback=True)
+        except ValueError:
+            pass
+    return opts
+
+
 def load_hosts(path=None):
     return load(path)[0]
 
 
 def save(hosts, refresh=DEFAULT_REFRESH, path=None):
-    """Write the config with owner-only permissions. Returns the path."""
+    """Write the config with owner-only permissions. Returns the path.
+
+    The UI switches (show_cpu, chart_temp) already in the file are kept.
+    """
     path = path or config_path()
+    opts = load_options(path) if os.path.exists(path) else {}
     cp = _parser()
     cp["general"] = {"refresh": str(max(1, int(refresh)))}
+    if os.path.exists(path):
+        cp["general"].update({k: "yes" if v else "no" for k, v in opts.items()})
     for h in hosts:
         sec = {"port": str(h.get("port") or 22)}
         for key in ("hostname", "user", "identity_file", "proxy_jump"):

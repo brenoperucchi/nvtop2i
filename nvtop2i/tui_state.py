@@ -88,6 +88,8 @@ class UIState:
         self.refresh_interval = refresh_interval
         self.collapsed = set()   # host aliases folded with F2
         self.compact = False     # F8
+        self.show_cpu = True     # CPU / memory line under each host (config: show_cpu)
+        self.chart_temp = True   # temperature line in the charts, t toggles (config: chart_temp)
         self.view = "graph"      # F9: GPU charts or the process table
         self.sort_key = "mem"    # F3 cycles SORT_KEYS
         self.filter_text = ""    # F4

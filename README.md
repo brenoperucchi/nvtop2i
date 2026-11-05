@@ -60,6 +60,8 @@ The setup writes `~/.config/nvtop2i/config.ini`, readable only by you. It holds 
 ```ini
 [general]
 refresh = 2
+show_cpu = yes
+chart_temp = yes
 
 [host lab]
 hostname = 10.0.0.5
@@ -72,6 +74,8 @@ proxy_jump = bastion
 | Setting | Meaning |
 |---|---|
 | `refresh` | Seconds between updates, at least 1 (default 2) |
+| `show_cpu` | `yes` or `no`: the CPU and memory line under each host (default yes) |
+| `chart_temp` | `yes` or `no`: the temperature line in the charts (default yes) |
 | `hostname` | Address of the host (default: the section name) |
 | `user` | SSH user (default: your current user) |
 | `port` | SSH port (default 22) |
@@ -104,6 +108,7 @@ Every action has a letter, because desktops often keep the function keys for the
 | `↑` `↓` | select a process (process view) |
 | `v`, `Tab` or `F9` | switch between the charts (default) and the process table |
 | `h` or `F2` | fold or unfold the selected host |
+| `t` | show or hide the temperature line in the charts |
 | `c` or `F8` | compact view, one line per GPU |
 | `i` or `F6` | next refresh interval: 1, 2, 5, 10 or 30 seconds |
 | `s` or `F3` | cycle the process sort: memory, GPU %, PID, user, host (process view) |
@@ -117,6 +122,9 @@ Bars are green below 50 %, yellow up to 80 % and red above. Temperature is green
 
 ## Notes
 
+- Under each host, one line shows CPU use, CPU temperature, load and memory. It is read from `/proc` and the hwmon sensors, so it needs a Linux host; it is left out on Windows and in the compact view. CPU use is measured between two refreshes, so it shows `--` right after start.
+- The local machine is listed under its own hostname.
+- Connection drops, failed attempts and reconnections are written to `~/.local/state/nvtop2i/nvtop2i.log` (set `NVTOP2I_LOG` to move it). A host row shows the attempt number and the time left until the next try.
 - PCIe throughput comes from `nvidia-smi dmon` and is reported in MB/s.
 - On Windows hosts that run `nvidia-smi` inside WSL, the process list is usually empty and fan, power or PCIe values may show as `--`.
 - Windows hosts whose OpenSSH default shell is `cmd.exe` work because the probe script is sent base64-encoded instead of single-quoted.

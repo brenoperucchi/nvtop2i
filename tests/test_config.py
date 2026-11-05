@@ -94,3 +94,13 @@ def test_cli_uses_the_config_hosts_and_refresh(monkeypatch, tmp_path):
     cli.main()
     assert seen["r"] == 9
     monkeypatch.setattr(probe, "HOSTS_LOADER", None)
+
+
+def test_ui_switches_default_to_on_and_survive_a_setup_save(tmp_path):
+    from nvtop2i import config
+    p = tmp_path / "config.ini"
+    assert config.load_options(str(p)) == {"show_cpu": True, "chart_temp": True}   # no file
+    p.write_text("[general]\nrefresh = 2\nchart_temp = no\nshow_cpu = bogus\n")
+    assert config.load_options(str(p)) == {"show_cpu": True, "chart_temp": False}
+    config.save([config.new_host("h", "1.2.3.4")], refresh=5, path=str(p))
+    assert config.load_options(str(p))["chart_temp"] is False                      # kept

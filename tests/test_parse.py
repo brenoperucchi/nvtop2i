@@ -126,3 +126,31 @@ def test_script_keeps_commands_off_stdin():
     script = "if true; then cat; echo after-cat; fi </dev/null"
     out = subprocess.run(["bash"], input=script, capture_output=True, text=True, timeout=10)
     assert "after-cat" in out.stdout
+
+
+SYS_BLOCK = """---SYS---
+cpu  1000 0 500 8000 500 0 0 0 0 0
+MemTotal:       65536000 kB
+MemAvailable:   32768000 kB
+0.80 0.60 0.50 1/1234 5678
+16
+TEMP 48500
+---ENDSYS---
+"""
+
+
+def test_sys_block_gives_cpu_counters_memory_load_and_temperature():
+    s = probe._parse_sys(SYS_BLOCK.split("---SYS---")[1].split("---ENDSYS---")[0])
+    assert s["cpu_total"] == 10000 and s["cpu_busy"] == 1500   # idle and iowait are not busy
+    assert s["mem_total_mb"] == 64000 and s["mem_used_mb"] == 32000 and s["mem_pct"] == 50
+    assert s["load1"] == 0.8 and s["cores"] == 16 and s["cpu_temp_c"] == 48.5
+
+
+def test_sys_block_without_proc_is_none_and_does_not_hide_the_gpus():
+    assert probe._parse_sys("") is None
+    gpu = "NVIDIA\n0, NVIDIA GeForce RTX 5090, 32607, 1200, 31407, 7, 41, 210, 405, 0, 30.5, 575.0, 5, 16"
+    for out in (SYS_BLOCK + gpu, gpu):
+        res = probe._fill_result({"alias": "a", "gpus": []}, out)
+        assert res["status"] == "ok" and res["gpus"][0]["name"] == "NVIDIA GeForce RTX 5090"
+    assert probe._fill_result({"alias": "a", "gpus": []}, SYS_BLOCK + gpu)["sys"]["cores"] == 16
+    assert probe._fill_result({"alias": "a", "gpus": []}, gpu)["sys"] is None

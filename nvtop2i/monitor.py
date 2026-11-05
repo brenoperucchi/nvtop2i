@@ -37,6 +37,7 @@ class _HostWorker(threading.Thread):
         self.jump_client = None
         self.down_since = None
         self.outage_attempts = 0
+        self.prev_cpu = None   # (busy, total) jiffies of the previous poll
 
     def _close(self):
         for c in (self.client, self.jump_client):
@@ -84,6 +85,16 @@ class _HostWorker(threading.Thread):
             self._close()
             return self._error_result(e)
 
+    def _add_cpu_pct(self, result):
+        """CPU % between two polls, from the /proc/stat counters of each."""
+        s = result.get("sys")
+        if not s or "cpu_total" not in s:
+            return
+        prev, self.prev_cpu = self.prev_cpu, (s["cpu_busy"], s["cpu_total"])
+        if prev and s["cpu_total"] > prev[1] and s["cpu_busy"] >= prev[0]:
+            s["cpu_pct"] = min(100.0, 100.0 * (s["cpu_busy"] - prev[0])
+                               / (s["cpu_total"] - prev[1]))
+
     def _log_transition(self, result, wait):
         alias = self.host_info["alias"]
         if self.host_info.get("is_local"):
@@ -108,6 +119,7 @@ class _HostWorker(threading.Thread):
             result = self.poll()
             if mon.stopped.is_set():
                 break
+            self._add_cpu_pct(result)
             self.fails = 0 if result["status"] != "error" else self.fails + 1
             wait = poll_delay(mon.interval(), self.fails)
             if result["status"] == "error":

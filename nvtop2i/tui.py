@@ -143,7 +143,27 @@ def _has_nvtop_fields(gpu):
     return "clock_gr_mhz" in gpu
 
 
-def _gpu_full(alias, gpu, history, width, chart_h=0, interval=2):
+def _sys_line(host, width):
+    """`CPU 12%  TEMP 48°C  LOAD 0.8  MEM[||||   23.1Gi/62.7Gi]`, or None without data."""
+    s = host.get("sys")
+    if not s or ("mem_total_mb" not in s and "cpu_pct" not in s):
+        return None
+    cpu, temp, load = s.get("cpu_pct"), s.get("cpu_temp_c"), s.get("load1")
+    segs = [(" CPU ", "white"), (f"{cpu:.0f}%" if cpu is not None else "--", _usage_role(cpu))]
+    if temp is not None:
+        segs += [("  TEMP ", "white"), (f"{temp:.0f}°C", _temp_role(temp))]
+    if load is not None:
+        segs += [("  LOAD ", "white"), (f"{load:.1f}", "bold")]
+    if "mem_total_mb" in s and "mem_used_mb" in s:
+        used = sum(len(t) for t, _ in segs) + 2
+        label = f"{_fmt_gi(s['mem_used_mb'], 1)}/{_fmt_gi(s['mem_total_mb'], 1)}"
+        inner = max(len(label) + 2, min(40, width - 1 - used - 5))
+        segs += [("  ", "white")] + _bar_segs("MEM", s["mem_pct"], inner, label,
+                                              _usage_role(s["mem_pct"]))
+    return _fit(segs, width - 1)
+
+
+def _gpu_full(alias, gpu, history, width, chart_h=0, interval=2, show_temp=False):
     """nvtop-style block for one GPU: three header lines, then the sparkline
     row, or a chart box of `chart_h` lines when chart_h > 0."""
     idx = gpu["index"]
@@ -189,7 +209,7 @@ def _gpu_full(alias, gpu, history, width, chart_h=0, interval=2):
 
     head = [_fit(line1, width - 1), _fit(line2, width - 1), _fit(line3, width - 1)]
     if chart_h > 0:
-        return head + _chart(history, alias, idx, width, chart_h, interval)
+        return head + _chart(history, alias, idx, width, chart_h, interval, temp=show_temp)
     fixed = len(" hist GPU   MEM   TEMP ")
     sw = max(8, min(40, (width - 1 - fixed) // 3))
     gs = history.series(alias, idx, "gpu")
@@ -204,25 +224,31 @@ def _gpu_full(alias, gpu, history, width, chart_h=0, interval=2):
     return head + [_fit(line4, width - 1)]
 
 
-def _chart(history, alias, idx, width, height, interval, now=None):
+def _chart(history, alias, idx, width, height, interval, now=None, temp=False):
     """nvtop-style box: the last 60 s of GPU% and mem% as thin step lines."""
     now = time.time() if now is None else now
     label_w = 4
     inner = width - 1 - label_w - 2
     rows = height - 2
     hold = 3 * interval + 1
-    cells = overlay([step_cells(history.timed(alias, idx, "gpu"), now, inner, rows, hold=hold),
-                     step_cells(history.timed(alias, idx, "mem"), now, inner, rows, hold=hold)])
+    layers = [step_cells(history.timed(alias, idx, "gpu"), now, inner, rows, hold=hold),
+              step_cells(history.timed(alias, idx, "mem"), now, inner, rows, hold=hold)]
     roles = ("chart_gpu", "chart_mem")
+    if temp:   # degrees C share the 0-100 axis
+        layers.append(step_cells(history.timed(alias, idx, "temp"), now, inner, rows, hold=hold))
+        roles += ("chart_temp",)
+    cells = overlay(layers)
     levels = (100, 75, 50, 25, 0) if rows >= 5 else (100, 50, 0)
     ticks = {round(k * (rows - 1) / (len(levels) - 1)): str(v) for k, v in enumerate(levels)}
     legend = {0: f" GPU{idx} %", 1: f" GPU{idx} mem%"} if rows >= 4 else {}
+    if temp and rows >= 4:
+        legend[2] = f" GPU{idx} temp C"
 
     lines = [[(" " * label_w + "┌" + "─" * inner + "┐", "dim")]]
     for r in range(rows):
         row = [list(c) for c in cells[r]]
         text = legend.get(r, "")
-        role_of = roles[r] if r < 2 else "white"
+        role_of = roles[r] if r < len(roles) else "white"
         segs = [(f"{ticks.get(r, ''):>{label_w - 1}} ", "white"), ("│", "dim")]
         run, run_role = "", None
         for c, (ch, owner) in enumerate(row):
@@ -394,7 +420,7 @@ def _footer(state, width):
     sort = f"s Sort:{state.sort_key}"
     if state.view == "graph":
         segs = [(" h Hosts  ", "white"), ("s Sort  f Filter  F5 Kill", "dim"),
-                (f"  i Interval:{state.refresh_interval}s  c Compact  v Processes  q Quit", "white"),
+                (f"  i Interval:{state.refresh_interval}s  c Compact  t Temp  v Processes  q Quit", "white"),
                 ("    ←/→ host   F-keys work too", "dim")]
         return _fit(segs, width - 1)
     if state.filtering:
@@ -421,13 +447,17 @@ def _gpu_section(results, history, state, width, compact, chart_h=0):
             if not compact:
                 lines.append([])
             continue
+        if not compact and state.show_cpu:
+            sys_line = _sys_line(host, width)
+            if sys_line:
+                lines.append(sys_line)
         for gpu in host["gpus"]:
             if compact or not _has_nvtop_fields(gpu):
                 lines.append(_gpu_compact(host["alias"], gpu, history, width, host_w,
                                           compact and hi == state.host_index))
             else:
                 lines.extend(_gpu_full(host["alias"], gpu, history, width, chart_h,
-                                       state.refresh_interval))
+                                       state.refresh_interval, state.chart_temp))
                 lines.append([])
         if not compact and not (host["gpus"] and _has_nvtop_fields(host["gpus"][-1])):
             lines.append([])
@@ -513,7 +543,7 @@ def _init_attrs():
         "dim": dim, "bold": bold, "value": bold, "hdr": bold | curses.A_UNDERLINE,
         "title": cp(4) | bold, "sel": curses.A_REVERSE,
         "host_sel": bold | curses.A_UNDERLINE,
-        "chart_gpu": cp(4), "chart_mem": cp(2),
+        "chart_gpu": cp(4), "chart_mem": cp(2), "chart_temp": cp(3),
         "badge_ok": cp(1) | bold, "badge_local": cp(6) | bold,
         "badge_nogpu": cp(2) | bold, "badge_off": cp(3) | bold,
     }
@@ -560,6 +590,9 @@ def _handle_key(key, state, screen):
         return "quit"
     if key in (ord("r"), ord("R")):
         return "refresh"
+    if key in (ord("t"), ord("T")):
+        state.chart_temp = not state.chart_temp
+        return None
     key = _ALIASES.get(key, key)
     if key == curses.KEY_F2:
         state.toggle_collapsed_at(state.host_index)
@@ -622,7 +655,10 @@ def run_tui(ssh_config_path=None, refresh_interval=2):
 
     from .monitor import Monitor
 
+    from . import config
     state = UIState(refresh_interval)
+    opts = config.load_options()
+    state.show_cpu, state.chart_temp = opts["show_cpu"], opts["chart_temp"]
     history = History()
     monitor = Monitor(interval=lambda: state.refresh_interval, on_result=history.record_host)
     monitor.start()

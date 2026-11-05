@@ -59,9 +59,21 @@ _MX_PROC_QUERY = (
     r" fi; done"
 )
 
+# CPU, memory, load and CPU temperature of the machine, from /proc and hwmon.
+# Printed first, between ---SYS--- and ---ENDSYS---; hosts without /proc print
+# nothing there and simply get no CPU line.
+_SYS_QUERY = (
+    "{ echo '---SYS---'; head -n1 /proc/stat; "
+    "grep -E '^(MemTotal|MemAvailable):' /proc/meminfo; cat /proc/loadavg; nproc; "
+    "for h in /sys/class/hwmon/hwmon*; do case $(cat $h/name) in "
+    "k10temp|coretemp|zenpower|cpu_thermal) echo \"TEMP $(cat $h/temp1_input)\"; break;; "
+    "esac; done; echo '---ENDSYS---'; } 2>/dev/null </dev/null; "
+)
+
 # ── Auto-detect: try nvidia-smi first, fall back to mx-smi ───────────────────
 # Output begins with "NVIDIA\n" or "MX\n" so the parser knows which format follows
 COMBINED_CMD = (
+    _SYS_QUERY +
     "if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then "
     "echo NVIDIA; " + _GPU_QUERY + "; echo '---SEP---'; " + _PROC_QUERY + "; "
     "echo '---DMON---'; " + _DMON_QUERY + "; "
@@ -133,6 +145,45 @@ def parse_ssh_config(path):
     return hosts
 
 
+def _parse_sys(text):
+    """CPU counters, memory, load and CPU temperature, or None when /proc was empty."""
+    info = {}
+    for line in text.split("\n"):
+        line = line.strip()
+        parts = line.split()
+        try:
+            if line.startswith("cpu "):
+                vals = [int(x) for x in parts[1:9]]
+                total = sum(vals)
+                idle = vals[3] + (vals[4] if len(vals) > 4 else 0)   # idle + iowait
+                info["cpu_total"], info["cpu_busy"] = total, total - idle
+            elif line.startswith("MemTotal:"):
+                info["mem_total_mb"] = int(parts[1]) / 1024
+            elif line.startswith("MemAvailable:"):
+                info["mem_available_mb"] = int(parts[1]) / 1024
+            elif line.startswith("TEMP "):
+                info["cpu_temp_c"] = int(parts[1]) / 1000
+            elif len(parts) == 5 and "." in parts[0]:   # /proc/loadavg
+                info["load1"] = float(parts[0])
+            elif len(parts) == 1 and parts[0].isdigit():   # nproc
+                info["cores"] = int(parts[0])
+        except (ValueError, IndexError):
+            continue
+    total, avail = info.get("mem_total_mb"), info.pop("mem_available_mb", None)
+    if total and avail is not None:
+        info["mem_used_mb"] = total - avail
+        info["mem_pct"] = (total - avail) / total * 100
+    return info or None
+
+
+def _split_sys(output):
+    """Cut the ---SYS--- block off the front: (sys info or None, rest of the output)."""
+    if "---SYS---" not in output or "---ENDSYS---" not in output:
+        return None, output
+    head, rest = output.split("---ENDSYS---", 1)
+    return _parse_sys(head.split("---SYS---", 1)[1]), rest.lstrip("\n")
+
+
 def _parse_combined_output(output):
     """Split combined command output into (gpu_part, proc_part, vendor).
 
@@ -140,6 +191,7 @@ def _parse_combined_output(output):
     Returns vendor as one of: 'nvidia', 'mx', 'tpu'.
     """
     vendor = "nvidia"
+    _, output = _split_sys(output)
     lines = output.split("\n")
     if lines and lines[0].strip() == "MX":
         vendor = "mx"
@@ -367,6 +419,7 @@ def _new_result(host_info):
 
 def _fill_result(result, output):
     """Parse the combined command output into `result` (status, gpus, error)."""
+    result["sys"], output = _split_sys(output)
     gpu_part, proc_part, vendor = _parse_combined_output(output)
 
     if not gpu_part:

@@ -362,3 +362,43 @@ def test_footer_names_the_view_that_v_switches_to():
     st.view = "procs"
     _, text = render(results(), 120, 40, state=st)
     assert any("v View Graph" in l for l in text) and not any("v Processes" in l for l in text)
+
+
+SYS = {"cpu_pct": 12.0, "cpu_temp_c": 48.0, "load1": 0.8, "cores": 16,
+       "mem_total_mb": 64000, "mem_used_mb": 32000, "mem_pct": 50}
+
+
+def _with_sys():
+    res = results()
+    res[0]["sys"] = dict(SYS)
+    return res
+
+
+def test_cpu_line_sits_under_the_host_and_can_be_switched_off():
+    st = UIState(2)
+    _, text = render(_with_sys(), 120, 60, state=st)
+    i = next(k for k, l in enumerate(text) if "localhost [Local]" in l)
+    assert "CPU 12%  TEMP 48°C  LOAD 0.8" in text[i + 1] and "MEM[" in text[i + 1]
+    assert "31.2Gi/62.5Gi" in text[i + 1]
+    st.show_cpu = False
+    _, text = render(_with_sys(), 120, 60, state=st)
+    assert not any("CPU 12%" in l for l in text)
+
+
+def test_cpu_line_is_left_out_without_data_and_in_compact_view():
+    _, text = render(results(), 120, 60)
+    assert not any(" CPU " in l for l in text)
+    _, text = render(_with_sys(), 120, 60, compact=True)
+    assert not any("CPU 12%" in l for l in text)
+
+
+def test_chart_has_a_temperature_line_when_enabled_and_t_toggles_it():
+    import curses
+    st = UIState(2)
+    assert st.chart_temp
+    _, text = render(results(), 120, 60, state=st)
+    assert any("GPU0 temp C" in l for l in text)
+    assert tui._handle_key(ord("t"), st, tui.Screen([], 0, [], False)) is None
+    assert not st.chart_temp
+    _, text = render(results(), 120, 60, state=st)
+    assert not any("temp C" in l for l in text) and any("GPU0 mem%" in l for l in text)

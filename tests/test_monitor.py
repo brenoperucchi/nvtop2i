@@ -362,3 +362,24 @@ def test_local_row_is_named_after_this_machine(monkeypatch):
     assert srv.query_local_gpu()["alias"] == "omarchy"
     monkeypatch.setattr(socket, "gethostname", lambda: "")
     assert srv.local_alias() == "localhost"
+
+
+def test_cpu_percent_comes_from_two_consecutive_polls(fake_server):
+    ticks = {"n": 0}
+
+    def with_cpu(n):
+        r = ok_result("alpha")
+        r["sys"] = {"cpu_busy": 100 * n, "cpu_total": 400 * n}   # 25 % busy each interval
+        return r
+    fake_server["behaviour"]["alpha"] = with_cpu
+
+    seen = []
+    m = mon.Monitor(interval=lambda: 0.02, on_result=lambda r: seen.append(r))
+    m.start()
+    try:
+        assert wait_for(lambda: fake_server["polls"].get("alpha", 0) >= 4)
+    finally:
+        m.stop()
+    alpha = [r["sys"] for r in seen if r["alias"] == "alpha" and r.get("sys")]
+    assert "cpu_pct" not in alpha[0]                      # first poll: nothing to compare with
+    assert all(abs(s["cpu_pct"] - 25) < 0.01 for s in alpha[1:])
