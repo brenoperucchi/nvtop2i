@@ -2,9 +2,9 @@
 
 A terminal GPU monitor in the style of [nvtop](https://github.com/Syllo/nvtop). It shows the GPUs of your own machine and of any hosts you can reach over SSH, all on one screen.
 
-![nvtop2i showing three GPUs on two hosts](docs/screenshot.png)
+![nvtop2i showing two GPUs on two hosts, each with a CPU line](docs/screenshot.png)
 
-Each GPU has the usual nvtop header: clocks, temperature, fan, power, PCIe link and throughput, plus utilization and memory bars. Under it sits a chart of the last 60 seconds of GPU and memory use. A second view lists the GPU processes of every host.
+Each GPU has the usual nvtop header: clocks, temperature, fan, power, PCIe link and throughput, plus utilization and memory bars. Under it sits a chart of the last 60 seconds of GPU use, memory use and temperature. Each host also gets one line with its CPU temperature, load, CPU use and memory. A second view lists the GPU processes of every host.
 
 ## Install
 
