@@ -69,9 +69,10 @@ class _HostWorker(threading.Thread):
         reused = self.client is not None
         try:
             return self._query()
-        except (ValueError, KeyError, IndexError) as e:
-            # the host answered with something we cannot parse: the
-            # connection is fine, keep it
+        except (ValueError, KeyError, IndexError, srv.CommandTimeout) as e:
+            # the host answered with something we cannot parse, or its GPU
+            # query hung: the connection is fine, keep it and do not retry
+            # at once (that would only stack another hung command)
             return self._error_result(e)
         except Exception as e:
             self._close()

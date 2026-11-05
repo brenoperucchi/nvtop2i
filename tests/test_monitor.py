@@ -304,3 +304,50 @@ def test_outage_is_logged_published_with_retry_info_and_recovery_is_logged(fake_
     assert "alpha: connection lost: " in text and "retrying in" in text
     assert "alpha: reconnected after" in text
     assert "localhost" not in text                       # the local row never logs outages
+
+
+def test_hung_gpu_query_reports_nvidia_smi_and_keeps_the_connection(fake_server):
+    def hangs(n):
+        raise srv.CommandTimeout("nvidia-smi did not answer in 15s")
+    fake_server["behaviour"]["alpha"] = hangs
+
+    seen = []
+    m = mon.Monitor(interval=lambda: 0.02, on_result=lambda r: seen.append(r))
+    m.start()
+    try:
+        assert wait_for(lambda: fake_server["polls"].get("alpha", 0) >= 4)
+    finally:
+        m.stop()
+    assert fake_server["opens"]["alpha"] == 1               # no reconnect, no stacked retry
+    errs = [r for r in seen if r["alias"] == "alpha" and r["status"] == "error"]
+    assert errs and errs[0]["error"] == "nvidia-smi did not answer in 15s"
+
+
+def test_run_on_client_cuts_a_hung_command_and_closes_its_channel():
+    import socket
+
+    class Chan:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    class Out:
+        channel = Chan()
+
+        def read(self):
+            raise socket.timeout("timed out")
+
+    class Client:
+        timeout = None
+
+        def exec_command(self, cmd, timeout=None):
+            Client.timeout = timeout
+            return None, Out(), None
+
+    host = {"alias": "w", "hostname": "w", "user": "u", "port": 22}
+    with pytest.raises(srv.CommandTimeout) as e:
+        srv.run_on_client(Client(), host)
+    assert Client.timeout == srv.COMMAND_TIMEOUT < srv.SSH_TIMEOUT
+    assert Out.channel.closed
+    assert srv._error_text(e.value) == f"nvidia-smi did not answer in {srv.COMMAND_TIMEOUT}s"

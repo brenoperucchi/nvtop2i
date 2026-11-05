@@ -12,6 +12,11 @@ import paramiko
 SSH_CONFIG_PATH = os.path.expanduser("~/.ssh/config")
 HOSTS_LOADER = None   # when set, called instead of reading SSH_CONFIG_PATH
 SSH_TIMEOUT = 45
+COMMAND_TIMEOUT = 15   # one GPU query takes well under a second; a hung one is cut here
+
+
+class CommandTimeout(Exception):
+    """The host is reachable but the GPU query did not answer in time."""
 
 # ── nvidia-smi queries ────────────────────────────────────────────────────────
 _GPU_QUERY = (
@@ -391,6 +396,8 @@ def _error_text(exc):
         return "Authentication failed"
     if isinstance(exc, paramiko.SSHException):
         return f"SSH error: {exc}"
+    if isinstance(exc, CommandTimeout):
+        return str(exc)
     if isinstance(exc, TimeoutError):
         return "Connection timed out"
     if isinstance(exc, OSError):
@@ -454,8 +461,13 @@ def run_on_client(client, host_info):
     Connection problems propagate; the caller decides whether to reconnect.
     """
     result = _new_result(host_info)
-    _, stdout, _ = client.exec_command(_remote_command(), timeout=SSH_TIMEOUT)
-    output = stdout.read().decode("utf-8").strip()
+    _, stdout, _ = client.exec_command(_remote_command(), timeout=COMMAND_TIMEOUT)
+    try:
+        output = stdout.read().decode("utf-8").strip()
+    except TimeoutError:   # socket.timeout is an alias of it
+        # drop the channel so the stuck command does not pile up on the host
+        stdout.channel.close()
+        raise CommandTimeout(f"nvidia-smi did not answer in {COMMAND_TIMEOUT}s") from None
     return _fill_result(result, output)
 
 
