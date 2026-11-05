@@ -20,11 +20,13 @@ class CommandTimeout(Exception):
     """The host is reachable but the GPU query did not answer in time."""
 
 # ── nvidia-smi queries ────────────────────────────────────────────────────────
-_GPU_QUERY = (
-    "nvidia-smi --query-gpu=index,name,memory.total,memory.used,memory.free,"
+_GPU_FIELDS = (
+    "index,name,memory.total,memory.used,memory.free,"
     "utilization.gpu,temperature.gpu,clocks.gr,clocks.mem,fan.speed,"
     "power.draw,power.limit,pcie.link.gen.current,pcie.link.width.current"
-    " --format=csv,noheader,nounits 2>/dev/null"
+)
+_GPU_QUERY = (
+    f"nvidia-smi --query-gpu={_GPU_FIELDS} --format=csv,noheader,nounits 2>/dev/null"
 )
 # Raw pmon output (columns are located by header, they differ between drivers),
 # followed by a pid -> user table. The user column is widened so ps does not
@@ -557,26 +559,20 @@ def _local_windows_output():
     """Same text COMBINED_CMD prints, built without a POSIX shell.
 
     cmd.exe cannot run the sh script (command -v, ps, 2>/dev/null), so on
-    Windows nvidia-smi is called directly. pmon and dmon are not supported by
-    the WDDM driver and usually print nothing, so those sections stay empty.
+    Windows nvidia-smi is called directly. The WDDM driver prints nothing for
+    pmon and dmon, so the process and PCIe sections stay empty and are not
+    queried at all.
     """
-    def smi(args):
-        try:
-            return subprocess.run(
-                ["nvidia-smi"] + args, capture_output=True, text=True, timeout=30
-            ).stdout.strip()
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            return ""
-
-    query = _GPU_QUERY.replace(" 2>/dev/null", "")
-    fields = query.split("--query-gpu=")[1].split(" --format")[0]
-    gpus = smi(["--query-gpu=" + fields, "--format=csv,noheader,nounits"])
+    try:
+        gpus = subprocess.run(
+            ["nvidia-smi", f"--query-gpu={_GPU_FIELDS}", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=COMMAND_TIMEOUT,
+        ).stdout.strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return ""
     if not gpus:
         return ""
-    pmon = smi(["pmon", "-c", "1", "-s", "um"])
-    dmon = smi(["dmon", "-c", "1", "-s", "t"])
-    return ("NVIDIA\n" + gpus + "\n---SEP---\n" + pmon + "\n---PS---\n"
-            "\n---DMON---\n" + dmon)
+    return "NVIDIA\n" + gpus + "\n---SEP---\n\n---PS---\n\n---DMON---\n"
 
 
 def query_local_gpu():
