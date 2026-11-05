@@ -6,6 +6,7 @@ import getpass
 import os
 import re
 import subprocess
+import sys
 
 import paramiko
 
@@ -540,6 +541,32 @@ def _remote_command():
     return 'bash -c "echo ' + encoded + ' | base64 -d | bash"'
 
 
+def _local_windows_output():
+    """Same text COMBINED_CMD prints, built without a POSIX shell.
+
+    cmd.exe cannot run the sh script (command -v, ps, 2>/dev/null), so on
+    Windows nvidia-smi is called directly. pmon and dmon are not supported by
+    the WDDM driver and usually print nothing, so those sections stay empty.
+    """
+    def smi(args):
+        try:
+            return subprocess.run(
+                ["nvidia-smi"] + args, capture_output=True, text=True, timeout=30
+            ).stdout.strip()
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return ""
+
+    query = _GPU_QUERY.replace(" 2>/dev/null", "")
+    fields = query.split("--query-gpu=")[1].split(" --format")[0]
+    gpus = smi(["--query-gpu=" + fields, "--format=csv,noheader,nounits"])
+    if not gpus:
+        return ""
+    pmon = smi(["pmon", "-c", "1", "-s", "um"])
+    dmon = smi(["dmon", "-c", "1", "-s", "t"])
+    return ("NVIDIA\n" + gpus + "\n---SEP---\n" + pmon + "\n---PS---\n"
+            "\n---DMON---\n" + dmon)
+
+
 def query_local_gpu():
     """Query the local machine for GPU information (single subprocess call)."""
     import socket
@@ -557,9 +584,12 @@ def query_local_gpu():
     }
 
     try:
-        output = subprocess.run(
-            COMBINED_CMD, shell=True, capture_output=True, text=True, timeout=30
-        ).stdout.strip()
+        if sys.platform == "win32":
+            output = _local_windows_output()
+        else:
+            output = subprocess.run(
+                COMBINED_CMD, shell=True, capture_output=True, text=True, timeout=30
+            ).stdout.strip()
         _fill_result(result, output)
 
     except FileNotFoundError:

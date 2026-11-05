@@ -22,6 +22,10 @@ pip install git+https://github.com/brenoperucchi/nvtop2i
 
 To update with uv, run `uv tool upgrade nvtop2i`.
 
+### Windows
+
+`windows-curses` is installed automatically. If the `nvtop2i` command is not found, the Scripts folder is not on your `PATH`; run `py -m nvtop2i` instead. The local GPUs are read with `nvidia-smi`. With the Windows (WDDM) driver the process list is empty and PCIe throughput shows `--`.
+
 ## Quick start
 
 1. Run the setup once. It asks about each host and saves the answers:

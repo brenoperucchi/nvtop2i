@@ -24,6 +24,7 @@ classifiers = [
 ]
 dependencies = [
     "paramiko>=2.0",
+    "windows-curses; sys_platform == 'win32'",
 ]
 
 [dependency-groups]
