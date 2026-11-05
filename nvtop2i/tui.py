@@ -144,21 +144,27 @@ def _has_nvtop_fields(gpu):
 
 
 def _sys_line(host, width):
-    """`CPU 12%  TEMP 48°C  LOAD 0.8  MEM[||||   23.1Gi/62.7Gi]`, or None without data."""
+    """`CPU 48°C  LOAD 0.8  CPU[||   12%]  MEM[|||   23.1Gi/62.7Gi]`, or None without data."""
     s = host.get("sys")
     if not s or ("mem_total_mb" not in s and "cpu_pct" not in s):
         return None
     cpu, temp, load = s.get("cpu_pct"), s.get("cpu_temp_c"), s.get("load1")
-    segs = [(" CPU ", "white"), (f"{cpu:.0f}%" if cpu is not None else "--", _usage_role(cpu))]
+    segs = [(" ", "white")]
     if temp is not None:
-        segs += [("  TEMP ", "white"), (f"{temp:.0f}°C", _temp_role(temp))]
+        segs += [("CPU ", "white"), (f"{temp:.0f}°C", _temp_role(temp)), ("  ", "white")]
     if load is not None:
-        segs += [("  LOAD ", "white"), (f"{load:.1f}", "bold")]
-    if "mem_total_mb" in s and "mem_used_mb" in s:
-        used = sum(len(t) for t, _ in segs) + 2
-        label = f"{_fmt_gi(s['mem_used_mb'], 1)}/{_fmt_gi(s['mem_total_mb'], 1)}"
-        inner = max(len(label) + 2, min(40, width - 1 - used - 5))
-        segs += [("  ", "white")] + _bar_segs("MEM", s["mem_pct"], inner, label,
+        segs += [("LOAD ", "white"), (f"{load:.1f}", "bold"), ("  ", "white")]
+    has_mem = "mem_total_mb" in s and "mem_used_mb" in s
+    mem_label = (f"{_fmt_gi(s['mem_used_mb'], 1)}/{_fmt_gi(s['mem_total_mb'], 1)}"
+                 if has_mem else "")
+    used = sum(len(t) for t, _ in segs)
+    # two bars share what is left, like the GPU and MEM bars of a GPU block
+    left = width - 1 - used - (2 if has_mem else 0) - (10 if has_mem else 5)
+    inner = max(len(mem_label) + 2, min(60, left // (2 if has_mem else 1)))
+    segs += _bar_segs("CPU", cpu, inner, f"{cpu:.0f}%" if cpu is not None else "--",
+                      _usage_role(cpu))
+    if has_mem:
+        segs += [("  ", "white")] + _bar_segs("MEM", s["mem_pct"], inner, mem_label,
                                               _usage_role(s["mem_pct"]))
     return _fit(segs, width - 1)
 

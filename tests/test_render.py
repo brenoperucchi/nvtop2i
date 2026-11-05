@@ -378,18 +378,19 @@ def test_cpu_line_sits_under_the_host_and_can_be_switched_off():
     st = UIState(2)
     _, text = render(_with_sys(), 120, 60, state=st)
     i = next(k for k, l in enumerate(text) if "localhost [Local]" in l)
-    assert "CPU 12%  TEMP 48°C  LOAD 0.8" in text[i + 1] and "MEM[" in text[i + 1]
+    assert "CPU 48°C  LOAD 0.8" in text[i + 1]
+    assert "CPU[" in text[i + 1] and "12%]" in text[i + 1] and "MEM[" in text[i + 1]
     assert "31.2Gi/62.5Gi" in text[i + 1]
     st.show_cpu = False
     _, text = render(_with_sys(), 120, 60, state=st)
-    assert not any("CPU 12%" in l for l in text)
+    assert not any("CPU[" in l for l in text)
 
 
 def test_cpu_line_is_left_out_without_data_and_in_compact_view():
     _, text = render(results(), 120, 60)
-    assert not any(" CPU " in l for l in text)
+    assert not any("CPU[" in l for l in text)
     _, text = render(_with_sys(), 120, 60, compact=True)
-    assert not any("CPU 12%" in l for l in text)
+    assert not any("CPU[" in l for l in text)
 
 
 def test_chart_has_a_temperature_line_when_enabled_and_t_toggles_it():
