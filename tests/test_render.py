@@ -297,7 +297,7 @@ def test_graph_view_is_default_and_draws_boxes_instead_of_the_table():
     assert any("GPU0 %" in l for l in text) and any("GPU0 mem%" in l for l in text)
     assert any(l.lstrip().startswith("┌─") for l in text)
     assert not any("COMMAND" in l for l in text)
-    assert any("v View:graph" in l for l in text)
+    assert any("v Processes" in l for l in text)
 
 
 def test_f9_toggles_between_graph_and_process_table():
@@ -353,3 +353,12 @@ def test_offline_host_shows_attempt_number_and_countdown():
             "gpus": [], "fails": 3, "retry_in": 8, "age_s": 3}
     line = "".join(t for t, _ in tui._host_header(host, False, False, 120))
     assert "Connection timed out  retry #3 in 5s" in line
+
+
+def test_footer_names_the_view_that_v_switches_to():
+    st = UIState(2)
+    _, text = render(results(), 120, 40, state=st)
+    assert any("v Processes" in l for l in text) and not any("v View Graph" in l for l in text)
+    st.view = "procs"
+    _, text = render(results(), 120, 40, state=st)
+    assert any("v View Graph" in l for l in text) and not any("v Processes" in l for l in text)

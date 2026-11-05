@@ -136,7 +136,7 @@ class Monitor:
 
     # -- lifecycle ----------------------------------------------------------
     def start(self):
-        self._spawn({"alias": "localhost", "is_local": True}, {})
+        self._spawn({"alias": srv.local_alias(), "is_local": True}, {})
         threading.Thread(target=self._setup, daemon=True, name="nvtop2i-setup").start()
 
     def _spawn(self, host_info, hosts_by_alias):

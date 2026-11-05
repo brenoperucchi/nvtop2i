@@ -47,6 +47,7 @@ def fake_server(monkeypatch):
     monkeypatch.setattr(srv, "discover_gadi_nodes", lambda by_alias: [])
     monkeypatch.setattr(srv, "query_local_gpu",
                         lambda: dict(ok_result("localhost"), is_local=True))
+    monkeypatch.setattr(srv, "local_alias", lambda: "localhost")
     monkeypatch.setattr(mon, "poll_delay", lambda interval, fails: 0.02)
 
     def open_connection(host_info, by_alias=None):
@@ -351,3 +352,13 @@ def test_run_on_client_cuts_a_hung_command_and_closes_its_channel():
     assert Client.timeout == srv.COMMAND_TIMEOUT < srv.SSH_TIMEOUT
     assert Out.channel.closed
     assert srv._error_text(e.value) == f"nvidia-smi did not answer in {srv.COMMAND_TIMEOUT}s"
+
+
+def test_local_row_is_named_after_this_machine(monkeypatch):
+    monkeypatch.setattr(srv.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": ""})())
+    import socket
+    monkeypatch.setattr(socket, "gethostname", lambda: "omarchy.lan")
+    assert srv.local_alias() == "omarchy"
+    assert srv.query_local_gpu()["alias"] == "omarchy"
+    monkeypatch.setattr(socket, "gethostname", lambda: "")
+    assert srv.local_alias() == "localhost"

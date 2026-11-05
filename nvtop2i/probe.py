@@ -575,13 +575,19 @@ def _local_windows_output():
     return "NVIDIA\n" + gpus + "\n---SEP---\n\n---PS---\n\n---DMON---\n"
 
 
+def local_alias():
+    """Name of the local row: this machine's short hostname."""
+    import socket
+    return socket.gethostname().split(".")[0] or "localhost"
+
+
 def query_local_gpu():
     """Query the local machine for GPU information (single subprocess call)."""
     import socket
 
     hostname = socket.gethostname()
     result = {
-        "alias": "localhost",
+        "alias": local_alias(),
         "hostname": hostname,
         "user": CURRENT_USER,
         "port": 0,

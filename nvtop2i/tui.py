@@ -394,7 +394,7 @@ def _footer(state, width):
     sort = f"s Sort:{state.sort_key}"
     if state.view == "graph":
         segs = [(" h Hosts  ", "white"), ("s Sort  f Filter  F5 Kill", "dim"),
-                (f"  i Interval:{state.refresh_interval}s  c Compact  v View:graph  q Quit", "white"),
+                (f"  i Interval:{state.refresh_interval}s  c Compact  v Processes  q Quit", "white"),
                 ("    ←/→ host   F-keys work too", "dim")]
         return _fit(segs, width - 1)
     if state.filtering:
@@ -403,7 +403,7 @@ def _footer(state, width):
         return _fit(segs, width - 1)
     flt = f"f Filter:{state.filter_text}" if state.filter_text else "f Filter"
     segs = [(f" h Hosts  {sort}  {flt}  ", "white"), ("F5 Kill", "dim"),
-            (f"  i Interval:{state.refresh_interval}s  c Compact  v View:procs  q Quit", "white"),
+            (f"  i Interval:{state.refresh_interval}s  c Compact  v View Graph  q Quit", "white"),
             ("    ←/→ host  ↑/↓ process", "dim")]
     return _fit(segs, width - 1)
 
