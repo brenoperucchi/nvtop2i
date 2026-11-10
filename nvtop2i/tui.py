@@ -242,13 +242,29 @@ def _gpu_full(alias, gpu, history, width, chart_h=0, interval=2, show_temp=False
     return head + [_fit(line4, width - 1)]
 
 
+def _chart_now(history, alias, idx, hold):
+    """The right edge of a chart: the newest sample while the data is fresh.
+
+    The screen is repainted several times a second; drawing against the clock
+    would slide the chart on every repaint and look like a refresh much faster
+    than the interval. Anchored to the last sample it moves when data arrives.
+    Once the data is older than `hold` the clock is used again, so a host that
+    stopped answering fades out instead of staying frozen."""
+    real = time.time()
+    samples = history.timed(alias, idx, "gpu")
+    if samples and real - samples[-1][0] <= hold:
+        return samples[-1][0]
+    return real
+
+
 def _chart(history, alias, idx, width, height, interval, now=None, temp=False):
     """nvtop-style box: the last 60 s of GPU% and mem% as thin step lines."""
-    now = time.time() if now is None else now
+    hold = 3 * interval + 1
+    if now is None:
+        now = _chart_now(history, alias, idx, hold)
     label_w = 4
     inner = width - 1 - label_w - 2
     rows = height - 2
-    hold = 3 * interval + 1
     layers = [step_cells(history.timed(alias, idx, "gpu"), now, inner, rows, hold=hold),
               step_cells(history.timed(alias, idx, "mem"), now, inner, rows, hold=hold)]
     roles = ("chart_gpu", "chart_mem")

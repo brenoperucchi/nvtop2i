@@ -442,3 +442,36 @@ def test_no_reading_from_driver_is_yellow_and_a_reset_is_red():
     role = lambda g: [r for l in tui._gpu_full("a", g, History(), 120)   # noqa: E731
                       for t, r in l if t.startswith("! ")][0]
     assert role(soft) == "yellow" and role(hard) == "red"
+
+
+def _history_with_samples(last_age, step=5, now=1_000_000.0):
+    """GPU samples `step` seconds apart, the newest one `last_age` seconds old."""
+    from collections import deque
+    h = History()
+    with h._lock:
+        s = h._series.setdefault(("a", 0), {n: deque(maxlen=60) for n in ("gpu", "mem", "temp", "t")})
+        for k, v in enumerate([10, 40, 90, 30, 60]):
+            s["t"].append(now - last_age - (4 - k) * step)
+            s["gpu"].append(v); s["mem"].append(50); s["temp"].append(45)
+    return h
+
+
+def _chart_at(h, t, monkeypatch, interval=5):
+    monkeypatch.setattr(tui.time, "time", lambda: t)
+    return _text(tui._chart(h, "a", 0, 80, 8, interval))
+
+
+def test_chart_only_moves_when_a_new_sample_arrives(monkeypatch):
+    # data every 5 s: the chart must not slide in between (it used to move
+    # every repaint, which looked like a refresh much faster than the interval)
+    now = 1_000_000.0
+    h = _history_with_samples(last_age=2, now=now)
+    assert _chart_at(h, now, monkeypatch) == _chart_at(h, now + 1, monkeypatch)
+    assert _chart_at(h, now, monkeypatch) == _chart_at(h, now + 3, monkeypatch)
+
+
+def test_chart_of_a_host_that_stopped_answering_does_not_stay_frozen(monkeypatch):
+    now = 1_000_000.0
+    stale = _history_with_samples(last_age=120, now=now)
+    empty = History()
+    assert _chart_at(stale, now, monkeypatch) == _chart_at(empty, now, monkeypatch)
