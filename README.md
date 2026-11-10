@@ -1,10 +1,28 @@
 # nvtop2i
 
-A terminal GPU monitor in the style of [nvtop](https://github.com/Syllo/nvtop). It shows the GPUs of your own machine and of any hosts you can reach over SSH, all on one screen.
+A terminal GPU monitor in the style of [nvtop](https://github.com/Syllo/nvtop). It shows the NVIDIA and AMD GPUs of your own machine and of any hosts you can reach over SSH, all on one screen.
 
 ![nvtop2i showing an NVIDIA and an AMD GPU on one host and an NVIDIA GPU on another, each host with a CPU line](docs/screenshot.png)
 
 Each GPU has the usual nvtop header: clocks, temperature, fan, power, PCIe link and throughput, plus utilization and memory bars. Under it sits a chart of the last 60 seconds of GPU use, memory use and temperature. Each host also gets one line with its CPU temperature, load, CPU use and memory. A second view lists the GPU processes of every host.
+
+## Supported GPUs
+
+| GPU | Read with | Shown |
+|---|---|---|
+| NVIDIA | `nvidia-smi` | usage, memory, temperature, fan, power, clocks, PCIe link and throughput |
+| AMD (`amdgpu` driver) | `/sys/class/drm`, name from `lspci` | usage, memory, temperature, fan, power, clocks, PCIe link |
+| MetaX | `mx-smi` | one-line layout, without clocks, fan or PCIe |
+| Google Cloud TPU | the `/dev/accel*` devices of the host | one-line layout, without clocks, fan or PCIe |
+
+NVIDIA works with any card that `nvidia-smi` lists. AMD works with any card the `amdgpu` driver exposes under `/sys/class/drm`; the older `radeon` driver is not read. Intel and Apple GPUs are not supported.
+
+I have tried it on an RTX 3080 Ti and an RTX 5090 (NVIDIA) and on an RX 580 (AMD), all on Linux. Other cards should work but have not been tested here. MetaX and TPU hosts come from the code nvtop2i started from and were not retested.
+
+- A host can mix vendors. Each card gets its own block, numbered as Device 0, 1 and so on.
+- Per-process usage is read for NVIDIA, MetaX and TPU hosts, but not for AMD yet, so the process view lists nothing for an AMD card. PCIe throughput (RX and TX) is read for NVIDIA only.
+- The AMD name comes from `lspci`, which only knows the chip family. An RX 580 shows as `RX 470/480/570/570X/580/580X/590`.
+- A GPU the driver stops reading is shown as a fault, not as an idle card (see Notes).
 
 ## Install
 
@@ -51,7 +69,7 @@ If the host rejects your key, the setup can copy your public key to it using you
 ### Requirements on each host
 
 - SSH login without a password prompt (a key or an agent).
-- `nvidia-smi` in the `PATH` of a non-interactive `bash` for NVIDIA GPUs. AMD GPUs need nothing extra, only the `amdgpu` driver.
+- `nvidia-smi` in the `PATH` of a non-interactive `bash` for NVIDIA GPUs. AMD GPUs need nothing extra, only the `amdgpu` driver (see Supported GPUs).
 
 ## Config file
 
@@ -129,8 +147,6 @@ Bars are green below 50 %, yellow up to 80 % and red above. Temperature is green
 - PCIe throughput comes from `nvidia-smi dmon` and is reported in MB/s.
 - On Windows hosts that run `nvidia-smi` inside WSL, the process list is usually empty and fan, power or PCIe values may show as `--`.
 - Windows hosts whose OpenSSH default shell is `cmd.exe` work because the probe script is sent base64-encoded instead of single-quoted.
-- AMD GPUs (amdgpu) are read from `/sys/class/drm` with no extra tools: usage, VRAM, temperature, fan, power, clocks and PCIe. The name comes from `lspci`, so some cards show the whole family (for example `RX 470/480/570/580/590`). The process list is not available for AMD yet.
-- MetaX (`mx-smi`) and Google Cloud TPU hosts are detected and shown with the one-line layout, without clocks, fan or PCIe fields.
 - Hosts under `*.nci.org.au` are treated as Gadi login nodes, and the GPU compute nodes allocated to your jobs are discovered every minute.
 
 ## Development
