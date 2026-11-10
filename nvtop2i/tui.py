@@ -193,6 +193,7 @@ def _gpu_full(alias, gpu, history, width, chart_h=0, interval=2, show_temp=False
     power, limit = gpu.get("power_w"), gpu.get("power_limit_w")
     power_pct = (power / limit * 100) if power is not None and limit else None
     fan = gpu.get("fan_pct")
+    fault = gpu.get("fault")
     line2 = [
         (" GPU ", "white"), (f"{mhz(gpu.get('clock_gr_mhz')):<8}", "bold"),
         (" MEM ", "white"), (f"{mhz(gpu.get('clock_mem_mhz')):<8}", "bold"),
@@ -203,6 +204,11 @@ def _gpu_full(alias, gpu, history, width, chart_h=0, interval=2, show_temp=False
         (" / ", "white"),
         (f"{limit:.0f} W" if limit is not None else "-- W", "bold"),
     ]
+    if fault:
+        # the driver cannot read the card: say so instead of a row of "--"
+        line2 = [(" ", "white"), (f"! {fault}", "red"),
+                 ("  (clocks, fan, power and load cannot be read)", "white"),
+                 ("  TEMP ", "white"), (f"{temp:.0f}°C" if temp is not None else "--", _temp_role(temp))]
 
     inner = max(10, min(80, (width - 1 - 10 - 2 - 1) // 2))
     mem_label = f"{_fmt_gi(gpu['memory_used_mb'])}/{_fmt_gi(gpu['memory_total_mb'])}"
@@ -294,7 +300,9 @@ def _gpu_compact(alias, gpu, history, width, host_w, selected=False):
 
     power, limit, fan = gpu.get("power_w"), gpu.get("power_limit_w"), gpu.get("fan_pct")
     extra = ""
-    if fan is not None or power is not None:
+    if gpu.get("fault"):
+        extra = " ! " + gpu["fault"].replace("GPU ", "", 1)
+    elif fan is not None or power is not None:
         extra = " " + (f"{fan:.0f}%" if fan is not None else "--")
         extra += " " + (f"{power:.0f}/{limit:.0f}W" if power is not None and limit else "")
     gs = history.series(alias, idx, "gpu")

@@ -38,6 +38,7 @@ class _HostWorker(threading.Thread):
         self.down_since = None
         self.outage_attempts = 0
         self.prev_cpu = None   # (busy, total) jiffies of the previous poll
+        self.faults = {}       # GPU index -> fault text while the driver reports one
 
     def _close(self):
         for c in (self.client, self.jump_client):
@@ -95,6 +96,19 @@ class _HostWorker(threading.Thread):
             s["cpu_pct"] = min(100.0, 100.0 * (s["cpu_busy"] - prev[0])
                                / (s["cpu_total"] - prev[1]))
 
+    def _log_gpu_faults(self, result):
+        """One line when a GPU starts reporting a fault and one when it stops."""
+        alias = self.host_info["alias"]
+        now = {g["index"]: g["fault"] for g in result.get("gpus", []) if g.get("fault")}
+        for idx, text in now.items():
+            if self.faults.get(idx) != text:
+                log.warning("%s: GPU %d fault: %s", alias, idx, text)
+        for idx in self.faults:
+            if idx not in now and result["status"] != "error":
+                log.info("%s: GPU %d recovered", alias, idx)
+        if result["status"] != "error":     # a lost connection says nothing about the card
+            self.faults = now
+
     def _log_transition(self, result, wait):
         alias = self.host_info["alias"]
         if self.host_info.get("is_local"):
@@ -126,6 +140,7 @@ class _HostWorker(threading.Thread):
                 result["fails"] = self.fails
                 result["retry_in"] = wait
             self._log_transition(result, wait)
+            self._log_gpu_faults(result)
             mon.publish(self.host_info["alias"], result)
             if result["status"] == "no_gpu":
                 wait = max(wait, NO_GPU_DELAY)

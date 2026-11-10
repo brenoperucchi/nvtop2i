@@ -403,3 +403,16 @@ def test_chart_has_a_temperature_line_when_enabled_and_t_toggles_it():
     assert not st.chart_temp
     _, text = render(results(), 120, 60, state=st)
     assert not any("temp C" in l for l in text) and any("GPU0 mem%" in l for l in text)
+
+
+def test_gpu_in_fault_shows_the_reason_instead_of_empty_fields():
+    g = gpu(0, "NVIDIA GeForce RTX 5090", 0, 30264, 32607, 47,
+            fault="GPU requires reset", clock_gr_mhz=None, clock_mem_mhz=None,
+            fan_pct=None, power_w=None, power_limit_w=None)
+    lines = tui._gpu_full("debian", g, History(), 120)
+    text = "\n".join("".join(t for t, _ in line) for line in lines)
+    assert "GPU requires reset" in text
+    roles = [r for line in lines for t, r in line if "GPU requires reset" in t]
+    assert roles and roles[0] == "red"
+    compact = tui._gpu_compact("debian", g, History(), 120, 8)
+    assert "reset" in "".join(t for t, _ in compact).lower()

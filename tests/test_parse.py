@@ -195,3 +195,21 @@ def test_amd_snippet_runs_in_a_shell_and_finds_this_machines_cards():
     assert out.startswith("---AMD---") and out.rstrip().endswith("---ENDAMD---")
     for line in out.split("\n")[1:-2]:
         assert len(line.split("|")) >= 17
+
+
+# The RTX 5090 of 2026-11-10: the driver lost the card and answers with text
+# instead of numbers (seen on the real host)
+GPU_OUT_NEEDS_RESET = """\
+0, NVIDIA GeForce RTX 5090, 32607, 30264, 2343, [N/A], 47, [N/A], [N/A], [GPU requires reset], [N/A], [N/A], [N/A], [N/A]
+"""
+
+
+def test_gpu_that_requires_a_reset_is_flagged_as_a_fault():
+    (gpu,) = probe._build_gpus(GPU_OUT_NEEDS_RESET)
+    assert gpu["fault"] == "GPU requires reset"
+    assert gpu["fan_pct"] is None            # still parsed, just empty
+
+
+def test_plain_na_values_are_not_a_fault():
+    (gpu,) = probe._build_gpus(GPU_OUT_WSL)
+    assert gpu.get("fault") is None

@@ -307,6 +307,21 @@ def _num(text):
         return None
 
 
+def _fault_text(parts):
+    """Why the driver cannot report a GPU, when it says so in words.
+
+    A card that dropped off answers with text in the number columns
+    ('[GPU requires reset]', 'ERR!') instead of '[N/A]', which a driver
+    prints for values it simply does not have (WSL)."""
+    for p in parts:
+        low = p.strip("[] ").lower()
+        if "requires reset" in low:
+            return "GPU requires reset"
+        if low in ("err!", "unknown error"):
+            return "GPU error"
+    return None
+
+
 def _build_gpus(gpu_part):
     """Parse GPU stats section into a list of GPU dicts."""
     gpus = []
@@ -333,6 +348,7 @@ def _build_gpus(gpu_part):
                 "memory_usage_pct": round(mem_used / mem_total * 100, 1) if mem_total > 0 else 0,
                 "gpu_utilization_pct": utilization,
                 "temperature_c": _num(parts[6]) or 0.0,
+                "fault": _fault_text(parts[2:]),
                 "clock_gr_mhz": _num(extra[0]),
                 "clock_mem_mhz": _num(extra[1]),
                 "fan_pct": _num(extra[2]),

@@ -383,3 +383,24 @@ def test_cpu_percent_comes_from_two_consecutive_polls(fake_server):
     alpha = [r["sys"] for r in seen if r["alias"] == "alpha" and r.get("sys")]
     assert "cpu_pct" not in alpha[0]                      # first poll: nothing to compare with
     assert all(abs(s["cpu_pct"] - 25) < 0.01 for s in alpha[1:])
+
+
+def test_gpu_fault_is_logged_when_it_starts_and_when_it_clears(fake_server, caplog):
+    def faulty_then_fine(n):
+        r = ok_result("alpha")
+        if 3 <= n <= 5:
+            r["gpus"][0]["fault"] = "GPU requires reset"
+        return r
+    fake_server["behaviour"]["alpha"] = faulty_then_fine
+
+    m = mon.Monitor(interval=lambda: 0.02)
+    with caplog.at_level("INFO", logger="nvtop2i"):
+        m.start()
+        try:
+            assert wait_for(lambda: fake_server["polls"].get("alpha", 0) >= 9)
+        finally:
+            m.stop()
+
+    text = caplog.text
+    assert text.count("alpha: GPU 0 fault: GPU requires reset") == 1   # once, not per poll
+    assert "alpha: GPU 0 recovered" in text
