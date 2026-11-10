@@ -213,3 +213,21 @@ def test_gpu_that_requires_a_reset_is_flagged_as_a_fault():
 def test_plain_na_values_are_not_a_fault():
     (gpu,) = probe._build_gpus(GPU_OUT_WSL)
     assert gpu.get("fault") is None
+
+
+def test_a_gpu_in_fault_has_no_load_reading_instead_of_zero():
+    (gpu,) = probe._build_gpus(GPU_OUT_NEEDS_RESET)
+    assert gpu["gpu_utilization_pct"] is None
+
+
+# the card answers with its name and memory but no load, clocks or power, and
+# no recognisable reason
+GPU_OUT_NO_READING = """\
+0, NVIDIA GeForce RTX 5090, 32607, 30264, 2343, [N/A], 47, [N/A], [N/A], [N/A], [N/A], [N/A], [N/A], [N/A]
+"""
+
+
+def test_a_card_that_gives_no_load_clock_or_power_is_flagged_as_no_reading():
+    (gpu,) = probe._build_gpus(GPU_OUT_NO_READING)
+    assert gpu["fault"] == "no reading from driver"
+    assert gpu["gpu_utilization_pct"] is None

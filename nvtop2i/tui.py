@@ -57,6 +57,11 @@ def _usage_role(pct):
     return "red"
 
 
+def _fault_role(fault):
+    """A card that needs a reset is red; one that just gives no reading is yellow."""
+    return "yellow" if fault.startswith("no reading") else "red"
+
+
 def _temp_role(temp):
     if temp is None:
         return "white"
@@ -206,7 +211,7 @@ def _gpu_full(alias, gpu, history, width, chart_h=0, interval=2, show_temp=False
     ]
     if fault:
         # the driver cannot read the card: say so instead of a row of "--"
-        line2 = [(" ", "white"), (f"! {fault}", "red"),
+        line2 = [(" ", "white"), (f"! {fault}", _fault_role(fault)),
                  ("  (clocks, fan, power and load cannot be read)", "white"),
                  ("  TEMP ", "white"), (f"{temp:.0f}°C" if temp is not None else "--", _temp_role(temp))]
 
@@ -215,7 +220,8 @@ def _gpu_full(alias, gpu, history, width, chart_h=0, interval=2, show_temp=False
     if len(mem_label) + 4 > inner:
         mem_label = f"{_fmt_gi(gpu['memory_used_mb'], 1)}/{_fmt_gi(gpu['memory_total_mb'], 1)}"
     line3 = ([(" ", "white")]
-             + _bar_segs("GPU", util, inner, f"{(util or 0):.0f}%", _usage_role(util))
+             + _bar_segs("GPU", util, inner, f"{util:.0f}%" if util is not None else "--",
+                       _usage_role(util))
              + [("  ", "white")]
              + _bar_segs("MEM", mem_pct, inner, mem_label, _usage_role(mem_pct)))
 
@@ -327,7 +333,8 @@ def _gpu_compact(alias, gpu, history, width, host_w, selected=False):
         mem_label = f"{gpu['memory_usage_pct']:.0f}%"
     segs = ([(" ", "white"), (head_alias, "host_sel" if selected else "white"),
              (head_rest, "white")]
-            + _bar_segs("GPU", util, inner, f"{(util or 0):.0f}%", _usage_role(util))
+            + _bar_segs("GPU", util, inner, f"{util:.0f}%" if util is not None else "--",
+                       _usage_role(util))
             + [(" ", "white")]
             + _bar_segs("MEM", mem_pct, inner, mem_label, _usage_role(mem_pct))
             + [(temp_s, _temp_role(temp))])

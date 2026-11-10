@@ -335,8 +335,16 @@ def _build_gpus(gpu_part):
             mem_total = _num(parts[2]) or 0.0
             mem_used = _num(parts[3]) or 0.0
             mem_free = _num(parts[4]) or 0.0
-            utilization = _num(parts[5]) or 0.0
+            utilization = _num(parts[5])
             extra = parts[7:] + [""] * (7 - len(parts[7:]))
+            fault = _fault_text(parts[2:])
+            if fault is None and utilization is None and _num(extra[0]) is None \
+                    and _num(extra[3]) is None:
+                # name and memory answer, load, clocks and power do not, and the
+                # driver gives no reason: still not a normal [N/A]
+                fault = "no reading from driver"
+            if utilization is None and not fault:
+                utilization = 0.0   # a lone [N/A] (WSL): keep the bar at zero
             pcie_gen = _num(extra[5])
             pcie_width = _num(extra[6])
             gpus.append({
@@ -348,7 +356,7 @@ def _build_gpus(gpu_part):
                 "memory_usage_pct": round(mem_used / mem_total * 100, 1) if mem_total > 0 else 0,
                 "gpu_utilization_pct": utilization,
                 "temperature_c": _num(parts[6]) or 0.0,
-                "fault": _fault_text(parts[2:]),
+                "fault": fault,
                 "clock_gr_mhz": _num(extra[0]),
                 "clock_mem_mhz": _num(extra[1]),
                 "fan_pct": _num(extra[2]),

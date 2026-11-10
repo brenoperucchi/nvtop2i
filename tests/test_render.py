@@ -416,3 +416,29 @@ def test_gpu_in_fault_shows_the_reason_instead_of_empty_fields():
     assert roles and roles[0] == "red"
     compact = tui._gpu_compact("debian", g, History(), 120, 8)
     assert "reset" in "".join(t for t, _ in compact).lower()
+
+
+def _text(lines):
+    return "\n".join("".join(t for t, _ in line) for line in lines)
+
+
+def test_gpu_in_fault_has_no_zero_percent_bar_and_charts_do_not_break():
+    g = gpu(0, "NVIDIA GeForce RTX 5090", None, 30264, 32607, 47,
+            fault="GPU requires reset")
+    h = History()
+    h.record_host({"alias": "debian", "status": "ok", "gpus": [g]})
+    lines = tui._gpu_full("debian", g, h, 120)
+    bar = [l for l in lines if "".join(t for t, _ in l).lstrip().startswith("GPU[")][0]
+    assert "0%" not in "".join(t for t, _ in bar).split("MEM[")[0]
+    assert "--" in "".join(t for t, _ in bar).split("MEM[")[0]
+    assert tui._gpu_full("debian", g, h, 120, chart_h=8)        # chart with None samples
+
+
+def test_no_reading_from_driver_is_yellow_and_a_reset_is_red():
+    base = dict(clock_gr_mhz=None, clock_mem_mhz=None, fan_pct=None,
+                power_w=None, power_limit_w=None)
+    soft = gpu(0, "N", None, 100, 200, 47, fault="no reading from driver", **base)
+    hard = gpu(0, "N", None, 100, 200, 47, fault="GPU requires reset", **base)
+    role = lambda g: [r for l in tui._gpu_full("a", g, History(), 120)   # noqa: E731
+                      for t, r in l if t.startswith("! ")][0]
+    assert role(soft) == "yellow" and role(hard) == "red"

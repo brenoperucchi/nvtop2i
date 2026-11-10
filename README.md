@@ -124,7 +124,8 @@ Bars are green below 50 %, yellow up to 80 % and red above. Temperature is green
 
 - Under each host, one line shows CPU use, CPU temperature, load and memory. It is read from `/proc` and the hwmon sensors, so it needs a Linux host; it is left out on Windows and in the compact view. CPU use is measured between two refreshes, so it shows `--` right after start.
 - The local machine is listed under its own hostname.
-- Connection drops, failed attempts and reconnections are written to `~/.local/state/nvtop2i/nvtop2i.log` (set `NVTOP2I_LOG` to move it). A host row shows the attempt number and the time left until the next try.
+- Connection drops, failed attempts, reconnections and GPU faults are written to `~/.local/state/nvtop2i/nvtop2i.log` (set `NVTOP2I_LOG` to move it). A host row shows the attempt number and the time left until the next try.
+- When the driver loses a card, the block shows `! GPU requires reset` (red) or `! no reading from driver` (yellow) instead of a row of `--`, and the load bar shows `--` instead of `0%`. The log gets one line when the fault starts and one when it clears. A plain `[N/A]` (WSL) is not a fault.
 - PCIe throughput comes from `nvidia-smi dmon` and is reported in MB/s.
 - On Windows hosts that run `nvidia-smi` inside WSL, the process list is usually empty and fan, power or PCIe values may show as `--`.
 - Windows hosts whose OpenSSH default shell is `cmd.exe` work because the probe script is sent base64-encoded instead of single-quoted.
