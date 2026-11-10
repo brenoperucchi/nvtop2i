@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nvtop2i"
-version = "0.4.0"
+version = "0.5.0"
 description = "nvtop-style GPU monitor for the local machine and several hosts over SSH"
 readme = "README.md"
 license = "MIT"

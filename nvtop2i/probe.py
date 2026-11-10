@@ -70,10 +70,31 @@ _SYS_QUERY = (
     "esac; done; echo '---ENDSYS---'; } 2>/dev/null </dev/null; "
 )
 
+# AMD GPUs (amdgpu driver) straight from sysfs, one line per card, fields split by |:
+# slot, name, busy %, vram used and total (bytes), temp (m°C), fan rpm and max,
+# pwm and max, power and cap (µW), sclk (Hz), sclk and mclk of the active DPM
+# level (MHz), PCIe speed and width. Printed between ---AMD--- and ---ENDAMD---
+# before the vendor section, next to NVIDIA, MetaX or TPU data.
+_AMD_QUERY = (
+    r"""{ echo '---AMD---'; """
+    r"""for c in /sys/class/drm/card[0-9]*; do case $c in *-*) continue;; esac; d=$c/device; """
+    r"""[ -r $d/gpu_busy_percent ] || continue; """
+    r"""h=$(ls -d $d/hwmon/hwmon* | head -n1); slot=$(basename $(readlink -f $d)); """
+    r"""name=$(lspci -s ${slot#0000:} -mm | cut -d'"' -f6); """
+    r"""dpm() { grep '\*' $d/$1 | sed 's/^[0-9]*: *\([0-9]*\).*/\1/'; }; """
+    r"""echo "$slot|$name|$(cat $d/gpu_busy_percent)|$(cat $d/mem_info_vram_used)|"""
+    r"""$(cat $d/mem_info_vram_total)|$(cat $h/temp1_input)|$(cat $h/fan1_input)|"""
+    r"""$(cat $h/fan1_max)|$(cat $h/pwm1)|$(cat $h/pwm1_max)|"""
+    r"""$(cat $h/power1_average || cat $h/power1_input)|$(cat $h/power1_cap)|"""
+    r"""$(cat $h/freq1_input)|$(dpm pp_dpm_sclk)|$(dpm pp_dpm_mclk)|"""
+    r"""$(cat $d/current_link_speed)|$(cat $d/current_link_width)"; """
+    r"""done; echo '---ENDAMD---'; } 2>/dev/null </dev/null; """
+)
+
 # ── Auto-detect: try nvidia-smi first, fall back to mx-smi ───────────────────
 # Output begins with "NVIDIA\n" or "MX\n" so the parser knows which format follows
 COMBINED_CMD = (
-    _SYS_QUERY +
+    _SYS_QUERY + _AMD_QUERY +
     "if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then "
     "echo NVIDIA; " + _GPU_QUERY + "; echo '---SEP---'; " + _PROC_QUERY + "; "
     "echo '---DMON---'; " + _DMON_QUERY + "; "
@@ -176,6 +197,71 @@ def _parse_sys(text):
     return info or None
 
 
+def _split_block(output, tag):
+    """Cut a ---TAG--- ... ---ENDTAG--- block out of the output: (its text or None, the rest)."""
+    start, end = f"---{tag}---", f"---END{tag}---"
+    if start not in output or end not in output:
+        return None, output
+    head, rest = output.split(end, 1)
+    before, text = head.split(start, 1)
+    return text, (before + rest.lstrip("\n")).lstrip("\n")
+
+
+_PCIE_GEN = {2.5: 1, 5.0: 2, 8.0: 3, 16.0: 4, 32.0: 5, 64.0: 6}
+
+
+def _amd_name(raw):
+    """lspci names the family and lists the cards of it: "Ellesmere [Radeon RX 470/.../590]"."""
+    m = re.search(r"\[(.+)\]", raw or "")
+    return "AMD " + (m.group(1) if m else (raw or "").strip() or "GPU")
+
+
+def _build_amd_gpus(text, first_index=0):
+    """GPU dicts for the AMD cards of the ---AMD--- block, numbered from first_index."""
+    rows = []
+    for line in (text or "").split("\n"):
+        p = [x.strip() for x in line.split("|")]
+        if len(p) >= 17:
+            rows.append(p)
+    gpus = []
+    for i, p in enumerate(sorted(rows, key=lambda r: r[0])):
+        used = (_num(p[3]) or 0.0) / 1048576
+        total = (_num(p[4]) or 0.0) / 1048576
+        pwm, pwm_max, rpm, rpm_max = _num(p[8]), _num(p[9]), _num(p[6]), _num(p[7])
+        if pwm is not None and pwm_max:
+            fan = pwm / pwm_max * 100
+        elif rpm is not None and rpm_max:
+            fan = rpm / rpm_max * 100
+        else:
+            fan = None
+        sclk_hz = _num(p[12])
+        speed = re.match(r"[\d.]+", p[15])
+        gen = _PCIE_GEN.get(float(speed.group())) if speed else None
+        width = _num(p[16])
+        scale = lambda v, k: None if _num(v) is None else _num(v) / k   # noqa: E731
+        gpus.append({
+            "index": first_index + i,
+            "name": _amd_name(p[1]),
+            "memory_total_mb": total,
+            "memory_used_mb": used,
+            "memory_free_mb": max(0.0, total - used),
+            "memory_usage_pct": round(used / total * 100, 1) if total > 0 else 0,
+            "gpu_utilization_pct": _num(p[2]) or 0.0,
+            "temperature_c": (scale(p[5], 1000) or 0.0),
+            "clock_gr_mhz": sclk_hz / 1e6 if sclk_hz is not None else _num(p[13]),
+            "clock_mem_mhz": _num(p[14]),
+            "fan_pct": fan,
+            "power_w": scale(p[10], 1e6),
+            "power_limit_w": scale(p[11], 1e6),
+            "pcie_gen": gen,
+            "pcie_width": int(width) if width is not None else None,
+            "pcie_rx_mbs": None,
+            "pcie_tx_mbs": None,
+            "processes": [],
+        })
+    return gpus
+
+
 def _split_sys(output):
     """Cut the ---SYS--- block off the front: (sys info or None, rest of the output)."""
     if "---SYS---" not in output or "---ENDSYS---" not in output:
@@ -192,6 +278,7 @@ def _parse_combined_output(output):
     """
     vendor = "nvidia"
     _, output = _split_sys(output)
+    _, output = _split_block(output, "AMD")
     lines = output.split("\n")
     if lines and lines[0].strip() == "MX":
         vendor = "mx"
@@ -420,11 +507,16 @@ def _new_result(host_info):
 def _fill_result(result, output):
     """Parse the combined command output into `result` (status, gpus, error)."""
     result["sys"], output = _split_sys(output)
+    amd_text, output = _split_block(output, "AMD")
     gpu_part, proc_part, vendor = _parse_combined_output(output)
 
     if not gpu_part:
+        amd = _build_amd_gpus(amd_text)
+        if amd:
+            result["gpus"], result["status"] = amd, "ok"
+            return result
         result["status"] = "no_gpu"
-        result["error"] = "No supported GPU found (tried nvidia-smi, mx-smi, and TPU)"
+        result["error"] = "No supported GPU found (tried nvidia-smi, mx-smi, TPU and AMD)"
         return result
     if vendor == "mx":
         gpus = _build_mx_gpus(gpu_part)
@@ -437,6 +529,7 @@ def _fill_result(result, output):
         result["is_tpu"] = True
     else:
         gpus = _build_nvidia(gpu_part, proc_part)
+    gpus += _build_amd_gpus(amd_text, max([g["index"] for g in gpus] + [-1]) + 1)
     result["gpus"] = gpus
     if gpus:
         result["status"] = "ok"

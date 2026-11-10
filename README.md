@@ -128,6 +128,7 @@ Bars are green below 50 %, yellow up to 80 % and red above. Temperature is green
 - PCIe throughput comes from `nvidia-smi dmon` and is reported in MB/s.
 - On Windows hosts that run `nvidia-smi` inside WSL, the process list is usually empty and fan, power or PCIe values may show as `--`.
 - Windows hosts whose OpenSSH default shell is `cmd.exe` work because the probe script is sent base64-encoded instead of single-quoted.
+- AMD GPUs (amdgpu) are read from `/sys/class/drm` with no extra tools: usage, VRAM, temperature, fan, power, clocks and PCIe. The name comes from `lspci`, so some cards show the whole family (for example `RX 470/480/570/580/590`). The process list is not available for AMD yet.
 - MetaX (`mx-smi`) and Google Cloud TPU hosts are detected and shown with the one-line layout, without clocks, fan or PCIe fields.
 - Hosts under `*.nci.org.au` are treated as Gadi login nodes, and the GPU compute nodes allocated to your jobs are discovered every minute.
 

@@ -154,3 +154,44 @@ def test_sys_block_without_proc_is_none_and_does_not_hide_the_gpus():
         assert res["status"] == "ok" and res["gpus"][0]["name"] == "NVIDIA GeForce RTX 5090"
     assert probe._fill_result({"alias": "a", "gpus": []}, SYS_BLOCK + gpu)["sys"]["cores"] == 16
     assert probe._fill_result({"alias": "a", "gpus": []}, gpu)["sys"] is None
+
+
+AMD_BLOCK = ("---AMD---\n0000:04:00.0|Ellesmere [Radeon RX 470/480/570/570X/580/580X/590]|49|"
+             "2744631296|8589934592|59000|784|3700|83|255||145000000|1294600000|1300|2000|"
+             "8.0 GT/s PCIe|4\n---ENDAMD---\n")
+NVIDIA_OUT = ("NVIDIA\n0, NVIDIA GeForce RTX 3080 Ti, 12288, 569, 11719, 7, 32, 210, 405, 0, "
+              "10.5, 370.0, 1, 16")
+
+
+def test_amd_card_is_read_from_the_sysfs_block():
+    g = probe._build_amd_gpus(AMD_BLOCK.split("---AMD---")[1].split("---ENDAMD---")[0], 3)[0]
+    assert g["index"] == 3 and g["name"] == "AMD Radeon RX 470/480/570/570X/580/580X/590"
+    assert g["gpu_utilization_pct"] == 49 and g["memory_total_mb"] == 8192
+    assert round(g["memory_used_mb"]) == 2617 and g["memory_usage_pct"] == 32.0
+    assert g["temperature_c"] == 59 and round(g["fan_pct"]) == 33      # pwm 83/255
+    assert g["power_w"] is None and g["power_limit_w"] == 145          # no power reading
+    assert round(g["clock_gr_mhz"]) == 1295 and g["clock_mem_mhz"] == 2000
+    assert g["pcie_gen"] == 3 and g["pcie_width"] == 4 and g["processes"] == []
+
+
+def test_amd_card_sits_next_to_the_nvidia_cards_with_the_next_index():
+    res = probe._fill_result({"alias": "a", "gpus": []}, AMD_BLOCK + NVIDIA_OUT)
+    assert res["status"] == "ok"
+    assert [(g["index"], g["name"][:6]) for g in res["gpus"]] == [(0, "NVIDIA"), (1, "AMD Ra")]
+
+
+def test_amd_only_host_is_ok_and_empty_amd_block_changes_nothing():
+    res = probe._fill_result({"alias": "a", "gpus": []}, AMD_BLOCK)
+    assert res["status"] == "ok" and res["gpus"][0]["index"] == 0
+    res = probe._fill_result({"alias": "a", "gpus": []}, "---AMD---\n---ENDAMD---\n" + NVIDIA_OUT)
+    assert [g["index"] for g in res["gpus"]] == [0]
+    res = probe._fill_result({"alias": "a", "gpus": []}, "---AMD---\n---ENDAMD---\n")
+    assert res["status"] == "no_gpu"
+
+
+def test_amd_snippet_runs_in_a_shell_and_finds_this_machines_cards():
+    out = subprocess.run(["bash", "-c", probe._AMD_QUERY], capture_output=True,
+                         text=True, timeout=30).stdout
+    assert out.startswith("---AMD---") and out.rstrip().endswith("---ENDAMD---")
+    for line in out.split("\n")[1:-2]:
+        assert len(line.split("|")) >= 17
