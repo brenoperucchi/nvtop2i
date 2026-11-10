@@ -2,7 +2,7 @@
 
 A terminal GPU monitor in the style of [nvtop](https://github.com/Syllo/nvtop). It shows the GPUs of your own machine and of any hosts you can reach over SSH, all on one screen.
 
-![nvtop2i showing two GPUs on two hosts, each with a CPU line](docs/screenshot.png)
+![nvtop2i showing an NVIDIA and an AMD GPU on one host and an NVIDIA GPU on another, each host with a CPU line](docs/screenshot.png)
 
 Each GPU has the usual nvtop header: clocks, temperature, fan, power, PCIe link and throughput, plus utilization and memory bars. Under it sits a chart of the last 60 seconds of GPU use, memory use and temperature. Each host also gets one line with its CPU temperature, load, CPU use and memory. A second view lists the GPU processes of every host.
 
@@ -51,7 +51,7 @@ If the host rejects your key, the setup can copy your public key to it using you
 ### Requirements on each host
 
 - SSH login without a password prompt (a key or an agent).
-- `nvidia-smi` in the `PATH` of a non-interactive `bash`.
+- `nvidia-smi` in the `PATH` of a non-interactive `bash` for NVIDIA GPUs. AMD GPUs need nothing extra, only the `amdgpu` driver.
 
 ## Config file
 
