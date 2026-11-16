@@ -1,6 +1,8 @@
 # nvtop2i
 
-A terminal GPU monitor in the style of [nvtop](https://github.com/Syllo/nvtop). It shows the NVIDIA and AMD GPUs of your own machine and of any hosts you can reach over SSH, all on one screen.
+A terminal GPU monitor in the style of [nvtop](https://github.com/Syllo/nvtop), for NVIDIA and AMD GPUs. It shows the GPUs of your own machine and of any hosts you can reach over SSH, all on one screen.
+
+Use it to watch GPU load, memory, temperature and power on a workstation and on remote servers from one terminal, for example a desktop with a GeForce and a Radeon card plus a GPU server reached over SSH. Nothing is installed on the remote hosts: it only needs `nvidia-smi` for NVIDIA cards or the `amdgpu` driver for AMD ones.
 
 ![nvtop2i showing an NVIDIA and an AMD GPU on one host and an NVIDIA GPU on another, each host with a CPU line](docs/screenshot.png)
 
