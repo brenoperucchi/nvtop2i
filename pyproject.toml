@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nvtop2i"
-version = "0.6.1"
+version = "0.7.0"
 description = "Terminal GPU monitor for NVIDIA and AMD GPUs: your machine and many hosts over SSH on one screen, nvtop style"
 readme = "README.md"
 license = "MIT"
