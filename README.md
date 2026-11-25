@@ -82,6 +82,7 @@ The setup writes `~/.config/nvtop2i/config.ini`, readable only by you. It holds 
 refresh = 2
 show_cpu = yes
 chart_temp = yes
+temp_scale = fixed
 
 [host lab]
 hostname = 10.0.0.5
@@ -96,6 +97,7 @@ proxy_jump = bastion
 | `refresh` | Seconds between updates, at least 1 (default 2) |
 | `show_cpu` | `yes` or `no`: the CPU and memory line under each host (default yes) |
 | `chart_temp` | `yes` or `no`: the temperature line in the charts (default yes) |
+| `temp_scale` | `fixed` or `auto`: the temperature axis of the charts. `fixed` is 30 to 90 °C (default); `auto` fits the last minute, so small swings stay visible. The `a` key switches it while running |
 | `hostname` | Address of the host (default: the section name) |
 | `user` | SSH user (default: your current user) |
 | `port` | SSH port (default 22) |

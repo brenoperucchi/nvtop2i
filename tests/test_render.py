@@ -398,7 +398,7 @@ def test_chart_has_a_temperature_line_when_enabled_and_t_toggles_it():
     st = UIState(2)
     assert st.chart_temp
     _, text = render(results(), 120, 60, state=st)
-    assert any("GPU0 temp C" in l for l in text)
+    assert any("GPU0 temp" in l for l in text)
     assert tui._handle_key(ord("t"), st, tui.Screen([], 0, [], False)) is None
     assert not st.chart_temp
     _, text = render(results(), 120, 60, state=st)
@@ -475,3 +475,40 @@ def test_chart_of_a_host_that_stopped_answering_does_not_stay_frozen(monkeypatch
     stale = _history_with_samples(last_age=120, now=now)
     empty = History()
     assert _chart_at(stale, now, monkeypatch) == _chart_at(empty, now, monkeypatch)
+
+
+def _temp_only_history(temps, now, step=1):
+    from collections import deque
+    h = History()
+    with h._lock:
+        s = h._series.setdefault(("a", 0), {n: deque(maxlen=120) for n in ("gpu", "mem", "temp", "t")})
+        for k, v in enumerate(temps):
+            s["t"].append(now - (len(temps) - 1 - k) * step)
+            s["gpu"].append(None); s["mem"].append(None); s["temp"].append(v)
+    return h
+
+
+def test_temperature_line_shows_a_52_to_58_swing(monkeypatch):
+    # on the fixed 0-100 axis a 6 degree swing filled one row and looked flat
+    now = 1_000_000.0
+    temps = [52 + 6 * ((i // 10) % 2) for i in range(60)]   # 52..58 in a 60 s window
+    h = _temp_only_history(temps, now)
+    monkeypatch.setattr(tui.time, "time", lambda: now)
+    lines = tui._chart(h, "a", 0, 80, 10, 1, temp=True, temp_scale="auto")
+    body = lines[1:-1]
+    used = [i for i, ln in enumerate(body) if any(c in "─│┌┐└┘" for c in "".join(t for t, _ in ln)[5:-1])]
+    assert len(used) >= 4
+    assert "temp 50-60C" in _text(lines)   # axis limits are shown
+
+
+def test_temperature_axis_is_fixed_by_default_and_a_switches_it(monkeypatch):
+    now = 1_000_000.0
+    h = _temp_only_history([52 + 6 * ((i // 10) % 2) for i in range(60)], now)
+    monkeypatch.setattr(tui.time, "time", lambda: now)
+    assert "temp 30-90C (fixed)" in _text(tui._chart(h, "a", 0, 80, 10, 1, temp=True))
+    st = UIState(2)
+    assert st.temp_scale == "fixed"
+    tui._handle_key(ord("a"), st, tui.Screen([], 0, [], False))
+    assert st.temp_scale == "auto"
+    tui._handle_key(ord("a"), st, tui.Screen([], 0, [], False))
+    assert st.temp_scale == "fixed"

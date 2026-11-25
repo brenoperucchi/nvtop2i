@@ -174,7 +174,8 @@ def _sys_line(host, width):
     return _fit(segs, width - 1)
 
 
-def _gpu_full(alias, gpu, history, width, chart_h=0, interval=2, show_temp=False):
+def _gpu_full(alias, gpu, history, width, chart_h=0, interval=2, show_temp=False,
+              temp_scale="fixed"):
     """nvtop-style block for one GPU: three header lines, then the sparkline
     row, or a chart box of `chart_h` lines when chart_h > 0."""
     idx = gpu["index"]
@@ -227,7 +228,8 @@ def _gpu_full(alias, gpu, history, width, chart_h=0, interval=2, show_temp=False
 
     head = [_fit(line1, width - 1), _fit(line2, width - 1), _fit(line3, width - 1)]
     if chart_h > 0:
-        return head + _chart(history, alias, idx, width, chart_h, interval, temp=show_temp)
+        return head + _chart(history, alias, idx, width, chart_h, interval, temp=show_temp,
+                                   temp_scale=temp_scale)
     fixed = len(" hist GPU   MEM   TEMP ")
     sw = max(8, min(40, (width - 1 - fixed) // 3))
     gs = history.series(alias, idx, "gpu")
@@ -257,7 +259,20 @@ def _chart_now(history, alias, idx, hold):
     return real
 
 
-def _chart(history, alias, idx, width, height, interval, now=None, temp=False):
+def _temp_range(samples, now, min_span=10.0):
+    """(lo, hi) degrees for the temperature line: the last minute's range, at least min_span wide."""
+    vals = [v for t, v in samples if v is not None and now - WINDOW_S <= t <= now]
+    if not vals:
+        return 30.0, 90.0
+    lo, hi = min(vals), max(vals)
+    if hi - lo < min_span:
+        mid = (lo + hi) / 2
+        lo, hi = mid - min_span / 2, mid + min_span / 2
+    return lo, hi
+
+
+def _chart(history, alias, idx, width, height, interval, now=None, temp=False,
+           temp_scale="fixed"):
     """nvtop-style box: the last 60 s of GPU% and mem% as thin step lines."""
     hold = 3 * interval + 1
     if now is None:
@@ -268,15 +283,19 @@ def _chart(history, alias, idx, width, height, interval, now=None, temp=False):
     layers = [step_cells(history.timed(alias, idx, "gpu"), now, inner, rows, hold=hold),
               step_cells(history.timed(alias, idx, "mem"), now, inner, rows, hold=hold)]
     roles = ("chart_gpu", "chart_mem")
-    if temp:   # degrees C share the 0-100 axis
-        layers.append(step_cells(history.timed(alias, idx, "temp"), now, inner, rows, hold=hold))
+    t_lo = t_hi = None
+    if temp:   # degrees C get their own axis, fitted to the last minute
+        tsamples = history.timed(alias, idx, "temp")
+        # "fixed": 30-90 C, steady but a small swing barely moves; "auto": fitted to the last minute
+        t_lo, t_hi = _temp_range(tsamples, now) if temp_scale == "auto" else (30.0, 90.0)
+        layers.append(step_cells(tsamples, now, inner, rows, hold=hold, lo=t_lo, hi=t_hi))
         roles += ("chart_temp",)
     cells = overlay(layers)
     levels = (100, 75, 50, 25, 0) if rows >= 5 else (100, 50, 0)
     ticks = {round(k * (rows - 1) / (len(levels) - 1)): str(v) for k, v in enumerate(levels)}
     legend = {0: f" GPU{idx} %", 1: f" GPU{idx} mem%"} if rows >= 4 else {}
     if temp and rows >= 4:
-        legend[2] = f" GPU{idx} temp C"
+        legend[2] = f" GPU{idx} temp {t_lo:.0f}-{t_hi:.0f}C ({temp_scale})"
 
     lines = [[(" " * label_w + "┌" + "─" * inner + "┐", "dim")]]
     for r in range(rows):
@@ -457,7 +476,7 @@ def _footer(state, width):
     sort = f"s Sort:{state.sort_key}"
     if state.view == "graph":
         segs = [(" h Hosts  ", "white"), ("s Sort  f Filter  F5 Kill", "dim"),
-                (f"  i Interval:{state.refresh_interval}s  c Compact  t Temp  v Processes  q Quit", "white"),
+                (f"  i Interval:{state.refresh_interval}s  c Compact  t Temp  a Scale  v Processes  q Quit", "white"),
                 ("    ←/→ host   F-keys work too", "dim")]
         return _fit(segs, width - 1)
     if state.filtering:
@@ -494,7 +513,7 @@ def _gpu_section(results, history, state, width, compact, chart_h=0):
                                           compact and hi == state.host_index))
             else:
                 lines.extend(_gpu_full(host["alias"], gpu, history, width, chart_h,
-                                       state.refresh_interval, state.chart_temp))
+                                       state.refresh_interval, state.chart_temp, state.temp_scale))
                 lines.append([])
         if not compact and not (host["gpus"] and _has_nvtop_fields(host["gpus"][-1])):
             lines.append([])
@@ -630,6 +649,9 @@ def _handle_key(key, state, screen):
     if key in (ord("t"), ord("T")):
         state.chart_temp = not state.chart_temp
         return None
+    if key in (ord("a"), ord("A")):
+        state.temp_scale = "auto" if state.temp_scale == "fixed" else "fixed"
+        return None
     key = _ALIASES.get(key, key)
     if key == curses.KEY_F2:
         state.toggle_collapsed_at(state.host_index)
@@ -696,6 +718,7 @@ def run_tui(ssh_config_path=None, refresh_interval=2):
     state = UIState(refresh_interval)
     opts = config.load_options()
     state.show_cpu, state.chart_temp = opts["show_cpu"], opts["chart_temp"]
+    state.temp_scale = opts["temp_scale"]
     history = History()
     monitor = Monitor(interval=lambda: state.refresh_interval, on_result=history.record_host)
     monitor.start()
